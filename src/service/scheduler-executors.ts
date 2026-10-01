@@ -23,13 +23,15 @@ export interface SchedulerExecutorDeps {
   store: StoreGateway
   registry: ProviderRegistry
   providerCtx: (provider: string) => ProviderCtx
+  /** persists a refreshed credential (rotating-token providers need this) */
+  persistCredential?: (account: Account, credential: unknown) => void
 }
 
 export function registerSchedulerExecutors(
   scheduler: Scheduler,
   deps: SchedulerExecutorDeps,
 ): void {
-  const { store, registry, providerCtx } = deps
+  const { store, registry, providerCtx, persistCredential } = deps
   const adapterFor = (provider: string) => registry.get(provider)
 
   scheduler.setExecutor('token_refresh', async (_job, account: Account) => {
@@ -37,6 +39,9 @@ export function registerSchedulerExecutors(
     if (!adapter?.ops.refreshAccount) return { skipped: 'unsupported' }
     const result = await adapter.ops.refreshAccount(providerCtx(account.provider), account)
     if (result.refreshed) {
+      // Rotating-refresh providers return the new credential; persist it before
+      // anything else so a rotated token is never lost.
+      if (result.credential !== undefined) persistCredential?.(account, result.credential)
       store.patchAccount(account.id, { tokenExpiryAt: result.expiresAt, status: 'active' })
     }
     return result

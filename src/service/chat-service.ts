@@ -178,6 +178,9 @@ export class ChatService {
     try {
       const result = await adapter.ops.refreshAccount(this.providerCtx(provider, account), account)
       if (!result.refreshed) return false
+      if (result.credential !== undefined) {
+        this.ctx.store.setCredential(account.credentialKey, this.ctx.cipher.encryptJson(result.credential))
+      }
       this.ctx.store.patchAccount(account.id, {
         status: 'active',
         tokenExpiryAt: result.expiresAt,

@@ -11,6 +11,7 @@ import { createCodeBuddyProvider } from './codebuddy/index.js'
 import { createWorkBuddyProvider } from './workbuddy/index.js'
 import { createWorkBuddyCnProvider } from './workbuddy-cn/index.js'
 import { createBuddyIntlProvider } from './buddy-intl/index.js'
+import { createLobsteraiProvider } from './lobsterai/index.js'
 import { createZCodeProvider } from './zcode/index.js'
 import { ZCodeCaptchaManager } from './zcode/captcha.js'
 
@@ -33,6 +34,7 @@ export function registerProviders(
   registry.register(createWorkBuddyCnProvider(options.fetcher))
   registry.register(createCodeBuddyProvider(options.fetcher))
   registry.register(createBuddyIntlProvider(options.fetcher))
+  registry.register(createLobsteraiProvider(options.fetcher ? { fetcher: options.fetcher } : {}))
   registry.register(createZCodeProvider({ captcha, ...(options.fetcher ? { fetcher: options.fetcher } : {}) }))
   return { captcha }
 }

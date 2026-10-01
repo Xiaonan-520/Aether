@@ -64,7 +64,7 @@ describe('provider registration', () => {
     expect(res.status).toBe(200)
     const body = (await res.json()) as { providers: Array<{ id: string }> }
     const ids = body.providers.map((p) => p.id).sort()
-    expect(ids).toEqual(['buddy-intl', 'codebuddy', 'workbuddy', 'workbuddy-cn', 'zcode'])
+    expect(ids).toEqual(['buddy-intl', 'codebuddy', 'lobsterai', 'workbuddy', 'workbuddy-cn', 'zcode'])
   })
 })
 

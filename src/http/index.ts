@@ -67,6 +67,9 @@ export async function main(): Promise<void> {
         throw new Error(`provider "${account.provider}" does not support refresh`)
       }
       const result = await adapter.ops.refreshAccount(providerCtx(account.provider), account)
+      if (result.refreshed && result.credential !== undefined) {
+        store.setCredential(account.credentialKey, ctx.cipher.encryptJson(result.credential))
+      }
       if (result.refreshed) {
         store.patchAccount(account.id, { tokenExpiryAt: result.expiresAt, status: 'active' })
         return { ...account, tokenExpiryAt: result.expiresAt, status: 'active' }
@@ -87,7 +90,13 @@ export async function main(): Promise<void> {
   }
 
   const scheduler = new Scheduler({ store, registry })
-  registerSchedulerExecutors(scheduler, { store, registry, providerCtx })
+  registerSchedulerExecutors(scheduler, {
+    store,
+    registry,
+    providerCtx,
+    persistCredential: (account, credential) =>
+      store.setCredential(account.credentialKey, ctx.cipher.encryptJson(credential)),
+  })
   scheduler.start()
 
   const { app, listen } = createGatewayApp(ctx)

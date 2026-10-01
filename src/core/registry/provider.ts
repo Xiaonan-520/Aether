@@ -64,6 +64,12 @@ export interface RefreshResult {
   /** true if refresh was performed and credential updated */
   refreshed: boolean
   error?: string
+  /**
+   * When set, the provider produced a new credential (e.g. a rotated refresh
+   * token) that the caller MUST persist for the account. Providers that only
+   * slide an expiry may omit it.
+   */
+  credential?: unknown
 }
 
 export interface ProviderChatImpl {
