@@ -1,0 +1,41 @@
+{
+  "model": "PLACEHOLDER_MODEL",
+  "stream": true,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a coding agent."
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "list files"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": "Sure."
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "now "
+        },
+        {
+          "type": "text",
+          "text": "run it"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "ok",
+      "tool_call_id": "call_1"
+    }
+  ]
+}
