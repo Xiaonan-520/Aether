@@ -58,7 +58,7 @@ describe('buddy provider registration', () => {
     expect(workbuddy.capabilities.loginMode).toBe('external-link')
     expect(workbuddy.capabilities.protocol).toBe('openai-chat')
     expect(workbuddy.capabilities.needsCaptcha).toBe(false)
-    expect(workbuddy.capabilities.supportsCredits).toBe(false)
+    expect(workbuddy.capabilities.supportsCredits).toBe(true)
   })
 })
 

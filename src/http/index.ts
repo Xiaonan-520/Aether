@@ -7,7 +7,7 @@ import { mkdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadConfig } from '../config/index.js'
 import { CredentialCipher } from '../store/crypto.js'
-import { MemoryStore } from '../store/memory-store.js'
+import { MemoryStore, dayKey } from '../store/memory-store.js'
 import { openSqliteStore } from '../store/sqlite/sqlite-store.js'
 import type { StoreGateway } from '../store/types.js'
 import { ProviderRegistry } from '../core/registry/provider-registry.js'
@@ -17,6 +17,7 @@ import { Scheduler } from '../core/worker/scheduler.js'
 import { createGatewayApp } from './app.js'
 import { registerProviders } from '../providers/register.js'
 import { resolveCredentialJson } from '../service/context.js'
+import { registerSchedulerExecutors } from '../service/scheduler-executors.js'
 import type { ServiceContext } from '../service/context.js'
 import type { ProviderCtx } from '../core/registry/provider.js'
 import type { Account } from '../core/types.js'
@@ -86,29 +87,7 @@ export async function main(): Promise<void> {
   }
 
   const scheduler = new Scheduler({ store, registry })
-  // Scheduler executors (idempotent per account; the framework handles retry,
-  // backoff, cooldown and concurrency). credit_claim is intentionally absent:
-  // neither WorkBuddy nor ZCode exposes a claim the gateway may call.
-  const execFor = (provider: string) => registry.get(provider)
-  scheduler.setExecutor('token_refresh', async (job: Job, account: Account) => {
-    const adapter = execFor(account.provider)
-    if (!adapter?.ops.refreshAccount) return { skipped: 'unsupported' }
-    const result = await adapter.ops.refreshAccount(providerCtx(account.provider), account)
-    if (result.refreshed) store.patchAccount(account.id, { tokenExpiryAt: result.expiresAt, status: 'active' })
-    return result
-  })
-  scheduler.setExecutor('quota_sync', async (_job: Job, account: Account) => {
-    const adapter = execFor(account.provider)
-    if (!adapter?.ops.getQuota) return { skipped: 'unsupported' }
-    const quota = await adapter.ops.getQuota(providerCtx(account.provider), account)
-    store.patchAccount(account.id, { quotaJson: quota.rawJson, lastQuotaAt: quota.lastUpdatedAt })
-    return { known: quota.known, remaining: quota.remaining }
-  })
-  scheduler.setExecutor('health_check', async (_job: Job, account: Account) => {
-    const adapter = execFor(account.provider)
-    if (!adapter?.ops.healthCheck) return { skipped: 'unsupported' }
-    return adapter.ops.healthCheck(providerCtx(account.provider), account)
-  })
+  registerSchedulerExecutors(scheduler, { store, registry, providerCtx })
   scheduler.start()
 
   const { app, listen } = createGatewayApp(ctx)

@@ -42,10 +42,10 @@ interface Harness {
   executed: Array<{ jobType: string; accountId: string }>
 }
 
-function setup(accounts: Account[], opts: { tickIntervalMs?: number } = {}): Harness {
+function setup(accounts: Account[], opts: { tickIntervalMs?: number; supportsCredits?: boolean } = {}): Harness {
   const store = new MemoryStore()
   const registry = new ProviderRegistry()
-  registry.register(new MockProvider())
+  registry.register(new MockProvider({ capabilities: { supportsCredits: opts.supportsCredits ?? false } }))
   for (const acc of accounts) store.createAccount(acc)
   const state: Harness = {
     store,
@@ -109,6 +109,16 @@ describe('scheduler — scans and enqueueing', () => {
     expect(h.store.listJobs('health_check')).toHaveLength(2)
     // needs_manual_action accounts are skipped for quota/claims
     expect(h.store.listJobs('quota_sync').map((j) => j.accountId)).toEqual(['a1'])
+    // mock provider does not declare supportsCredits -> no credit_claim jobs
+    expect(h.store.listJobs('credit_claim')).toHaveLength(0)
+  })
+
+  it('enqueues credit_claim only for providers declaring supportsCredits', async () => {
+    const h = setup(
+      [account({ id: 'a1' }), account({ id: 'a2', status: 'needs_manual_action' })],
+      { supportsCredits: true },
+    )
+    await h.scheduler.tick()
     expect(h.store.listJobs('credit_claim').map((j) => j.accountId)).toEqual(['a1'])
   })
 })

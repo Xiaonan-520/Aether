@@ -15,6 +15,7 @@ import type {
   ProviderCapabilities,
   QuotaSnapshot,
   Tool,
+  ClaimOutcome,
 } from '../../../core/types.js'
 import type {
   BeginLoginInput,
@@ -29,6 +30,7 @@ import {
   CHAT_PATH,
 } from './constants.js'
 import { resolveUserAgent, type BuddyProduct } from './product.js'
+import { claimDailyCheckin, fetchCheckinStatus } from './credits.js'
 import {
   BuddyRefreshExpiredError,
   buildCredential,
@@ -60,8 +62,9 @@ export function createBuddyProvider(product: BuddyProduct, fetcher: Fetcher = fe
     supportsOAuth: true,
     supportsRefreshToken: true,
     supportsQuota: true,
-    // WorkBuddy has no daily check-in endpoint; CodeBuddy claims are not wired yet.
-    supportsCredits: false,
+    // Daily check-in verified live against this deployment's WorkBuddy account
+    // (POST /v2/billing/meter/checkin-activity-status returns real data).
+    supportsCredits: true,
     supportsStreaming: true,
     supportsVision: true,
     supportsToolCall: true,
@@ -328,6 +331,23 @@ export function createBuddyProvider(product: BuddyProduct, fetcher: Fetcher = fe
       },
       async getQuota(): Promise<QuotaSnapshot> {
         return { known: false, remaining: null, total: null, resetAt: null, lastUpdatedAt: Date.now(), rawJson: null }
+      },
+      /**
+       * Daily check-in claim.
+       *
+       * The authoritative status is read first so the claim endpoint is only
+       * called when the activity is running and today's credit is unclaimed:
+       * an inactive activity returns `not_available` and an already-claimed day
+       * returns `already_claimed`, both without a second upstream call.
+       */
+      async claimCredits(ctx: ProviderCtx, account: Account): Promise<ClaimOutcome> {
+        const credential = await credentialOf(ctx, account)
+        if (!credential) throw new UpstreamError({ kind: 'AUTH_INVALID', message: 'buddy: no credential' })
+        const status = await fetchCheckinStatus(product, credential, fetcher)
+        if (!status) return { kind: 'failed', message: 'could not read check-in status' }
+        if (!status.active) return { kind: 'not_available', message: 'check-in activity is not active' }
+        if (status.todayCheckedIn) return { kind: 'already_claimed', message: 'already checked in today' }
+        return claimDailyCheckin(product, credential, fetcher)
       },
       async healthCheck(ctx: ProviderCtx, account: Account): Promise<{ ok: boolean; error?: string }> {
         const credential = await credentialOf(ctx, account)

@@ -150,6 +150,11 @@ export class Scheduler {
       for (const stored of this.store.listAccounts()) {
         const account = stored.account
         if (!scan.eligible(account, now, this.opts)) continue
+        // Only providers that declare the capability get credit_claim jobs;
+        // otherwise the scan would enqueue jobs no executor can serve.
+        if (scan.jobType === 'credit_claim' && !this.registry.get(account.provider)?.capabilities.supportsCredits) {
+          continue
+        }
         // idempotency for daily claims is enforced by the store at execution;
         // job ids are unique per enqueue
         this.store.createJob({
