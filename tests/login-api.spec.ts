@@ -58,13 +58,13 @@ function admin(token = ADMIN) {
 }
 
 describe('provider registration', () => {
-  it('registers workbuddy, codebuddy and zcode', async () => {
+  it('registers every Buddy-family product plus zcode', async () => {
     const { app } = setup()
     const res = await app.request('/api/providers', { headers: admin() })
     expect(res.status).toBe(200)
     const body = (await res.json()) as { providers: Array<{ id: string }> }
     const ids = body.providers.map((p) => p.id).sort()
-    expect(ids).toEqual(['codebuddy', 'workbuddy', 'zcode'])
+    expect(ids).toEqual(['buddy-intl', 'codebuddy', 'workbuddy', 'workbuddy-cn', 'zcode'])
   })
 })
 

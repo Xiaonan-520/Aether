@@ -64,6 +64,10 @@ export function createBuddyProvider(product: BuddyProduct, fetcher: Fetcher = fe
     supportsQuota: true,
     // Daily check-in verified live against this deployment's WorkBuddy account
     // (POST /v2/billing/meter/checkin-activity-status returns real data).
+    // NOTE: the reference (jet-hub) claims the international product has no
+    // check-in endpoint; that is a reference-vs-live discrepancy, so the live
+    // behaviour is kept unless a real account shows otherwise. Products may
+    // still override this per config.
     supportsCredits: true,
     supportsStreaming: true,
     supportsVision: true,
@@ -72,6 +76,7 @@ export function createBuddyProvider(product: BuddyProduct, fetcher: Fetcher = fe
     needsCaptcha: false,
     loginMode: 'external-link',
     protocol: 'openai-chat',
+    ...product.capabilities,
   }
 
   /** Decrypted credential for an account (ProviderCtx carries it now). */
