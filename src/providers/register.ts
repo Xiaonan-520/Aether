@@ -13,6 +13,8 @@ import { createWorkBuddyCnProvider } from './workbuddy-cn/index.js'
 import { createBuddyIntlProvider } from './buddy-intl/index.js'
 import { createLobsteraiProvider } from './lobsterai/index.js'
 import { createClineProvider } from './cline/index.js'
+import { createTraeProvider } from './trae/index.js'
+import { TRAE, TRAE_INTL } from './trae/product.js'
 import { createZCodeProvider } from './zcode/index.js'
 import { ZCodeCaptchaManager } from './zcode/captcha.js'
 
@@ -38,5 +40,7 @@ export function registerProviders(
   registry.register(createLobsteraiProvider(options.fetcher ? { fetcher: options.fetcher } : {}))
   registry.register(createClineProvider(options.fetcher ? { fetcher: options.fetcher } : {}))
   registry.register(createZCodeProvider({ captcha, ...(options.fetcher ? { fetcher: options.fetcher } : {}) }))
+  registry.register(createTraeProvider({ product: TRAE, ...(options.fetcher ? { fetcher: options.fetcher } : {}) }))
+  registry.register(createTraeProvider({ product: TRAE_INTL, ...(options.fetcher ? { fetcher: options.fetcher } : {}) }))
   return { captcha }
 }
