@@ -30,6 +30,7 @@ export function dayKey(atMs: number, tzOffsetMinutes = -new Date().getTimezoneOf
 export class MemoryStore implements StoreGateway {
   private readonly accounts = new Map<string, Account>()
   private readonly credentials = new Map<string, CredentialBlob>()
+  private readonly providers = new Map<string, { id: string; displayName: string; capabilitiesJson: string; enabled: boolean }>()
   private readonly models = new Map<string, ModelEntry>() // key: `${modelId}\u0000${provider}`
   private readonly quotas = new Map<string, QuotaSnapshot>()
   private readonly claims: Array<{
@@ -95,6 +96,17 @@ export class MemoryStore implements StoreGateway {
 
   deleteCredential(key: string): void {
     this.credentials.delete(key)
+  }
+
+  upsertProviders(providers: Array<{ id: string; displayName: string; capabilitiesJson: string; enabled?: boolean }>): void {
+    for (const p of providers) {
+      this.providers.set(p.id, {
+        id: p.id,
+        displayName: p.displayName,
+        capabilitiesJson: p.capabilitiesJson,
+        enabled: p.enabled !== false,
+      })
+    }
   }
 
   upsertModels(entries: ModelEntry[]): void {

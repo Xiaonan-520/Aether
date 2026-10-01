@@ -57,6 +57,9 @@ export interface StoreGateway {
   getCredential(key: string): CredentialBlob | null
   deleteCredential(key: string): void
 
+  /** Registered provider adapters (FK target for accounts/models rows). */
+  upsertProviders(providers: Array<{ id: string; displayName: string; capabilitiesJson: string; enabled?: boolean }>): void
+
   /** Model registry entries. */
   upsertModels(entries: ModelEntry[]): void
   listModels(): ModelEntry[]

@@ -37,6 +37,14 @@ export async function main(): Promise<void> {
   const registry = new ProviderRegistry()
   // Phase 3B: WorkBuddy + CodeBuddy (shared Buddy protocol) and ZCode.
   const { captcha } = registerProviders(registry)
+  // Persist the registered providers: accounts.provider has a foreign key to
+  // the providers table (with foreign_keys = ON), so an account cannot be
+  // created until its provider row exists.
+  store.upsertProviders(registry.list().map((p) => ({
+    id: p.id,
+    displayName: p.displayName,
+    capabilitiesJson: JSON.stringify(p.capabilities),
+  })))
 
   /** Build a ProviderCtx that resolves the *decrypted* credential. */
   const providerCtx = (provider: string): ProviderCtx => ({
