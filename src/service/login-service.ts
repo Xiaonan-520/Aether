@@ -47,7 +47,7 @@ export class LoginService {
   }
 
   /** Create a pending account and start the provider login flow. */
-  async begin(provider: string, displayName?: string): Promise<LoginBeginResult> {
+  async begin(provider: string, displayName?: string, phone?: string): Promise<LoginBeginResult> {
     const adapter = this.ctx.registry.get(provider)
     if (!adapter) throw new OpenAIApiError(404, 'invalid_request_error', `unknown provider "${provider}"`)
     if (!adapter.auth.beginLogin) {
@@ -84,7 +84,11 @@ export class LoginService {
     if (!created.ok) throw new OpenAIApiError(409, 'invalid_request_error', created.error)
 
     try {
-      const started = await adapter.auth.beginLogin({ provider, accountId: id })
+      const started = await adapter.auth.beginLogin({
+        provider,
+        accountId: id,
+        ...(phone !== undefined ? { phone } : {}),
+      })
       this.ctx.store.addEvent({
         ts: now, level: 'info', provider, accountId: id, kind: 'login.started', message: `login started for ${provider}`,
       })

@@ -169,7 +169,9 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
     const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>))
     const provider = c.req.param('provider')
     const displayName = typeof body.displayName === 'string' ? body.displayName : undefined
-    return c.json(await login.begin(provider, displayName))
+    // phone is only used by sms-login providers; other providers ignore it
+    const phone = typeof body.phone === 'string' ? body.phone : undefined
+    return c.json(await login.begin(provider, displayName, phone))
   })
   app.get('/api/accounts/:provider/login/:loginId', async (c) => {
     return c.json(await login.poll(c.req.param('provider'), c.req.param('loginId')))

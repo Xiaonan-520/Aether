@@ -15,6 +15,8 @@ import { createLobsteraiProvider } from './lobsterai/index.js'
 import { createClineProvider } from './cline/index.js'
 import { createTraeProvider } from './trae/index.js'
 import { TRAE, TRAE_INTL } from './trae/product.js'
+import { createCodeArtsProvider } from './codearts/index.js'
+import { createLoomyProvider } from './loomy/index.js'
 import { createZCodeProvider } from './zcode/index.js'
 import { ZCodeCaptchaManager } from './zcode/captcha.js'
 
@@ -42,5 +44,7 @@ export function registerProviders(
   registry.register(createZCodeProvider({ captcha, ...(options.fetcher ? { fetcher: options.fetcher } : {}) }))
   registry.register(createTraeProvider({ product: TRAE, ...(options.fetcher ? { fetcher: options.fetcher } : {}) }))
   registry.register(createTraeProvider({ product: TRAE_INTL, ...(options.fetcher ? { fetcher: options.fetcher } : {}) }))
+  registry.register(createCodeArtsProvider(options.fetcher ? { fetcher: options.fetcher } : {}))
+  registry.register(createLoomyProvider(options.fetcher ? { fetcher: options.fetcher } : {}))
   return { captcha }
 }

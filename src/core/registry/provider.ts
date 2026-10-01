@@ -35,6 +35,11 @@ export interface CredentialHandle {
 export interface BeginLoginInput {
   provider: string
   accountId: string
+  /**
+   * Phone number for providers whose login mode is `sms`. Optional and ignored
+   * by every other login mode, so it introduces no provider branch in Core.
+   */
+  phone?: string
 }
 export interface BeginLoginResult {
   loginUrl?: string
