@@ -252,10 +252,11 @@ Provider-specific 实现禁止污染 Gateway Core。
 ## 13. Git Information
 
 - 仓库位置：`/workspace/gateway`
-- 当前 branch：`<init 后见 git branch>`
-- 当前 commit：`<init 后见 git log>`
-- remote：`<尚未配置>`
+- 当前 branch：`main`
+- 当前 commit（Handoff 首次提交）：`18e1d42` (完整: 18e1d42a10b85af1f56979c96b9fdb4e0dea6fc6)
+- remote：**尚未配置**（迁移到 GitHub 后需 `git remote add origin <url>` 再 push）
 - 备注：本仓库在本次 Handoff 中**首次 git init 并提交**；不 amend 既有历史（此前无历史）。
+- 提交信息：`chore: add project handoff for development migration`
 
 ---
 
