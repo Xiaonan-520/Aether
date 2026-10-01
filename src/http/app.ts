@@ -10,6 +10,7 @@ import type { ServiceContext } from '../service/context.js'
 import { ChatService } from '../service/chat-service.js'
 import { ModelService } from '../service/model-service.js'
 import { AdminService } from '../service/admin-service.js'
+import { LoginService } from '../service/login-service.js'
 import { parseChatCompletionsRequest, OpenAIApiError } from '../protocol/openai/parse.js'
 import {
   serializeChatCompletion,
@@ -24,6 +25,7 @@ export interface GatewayApp {
   chat: ChatService
   models: ModelService
   admin: AdminService
+  login: LoginService
   listen: (port: number, host: string) => Promise<unknown>
 }
 
@@ -44,6 +46,7 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
   const chat = new ChatService(ctx)
   const models = new ModelService(ctx)
   const admin = new AdminService(ctx)
+  const login = new LoginService(ctx)
 
   const app = new Hono()
 
@@ -158,6 +161,33 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
     admin.removeAccount(c.req.param('id'))
     return c.json({ ok: true })
   })
+  // -- interactive login (Phase 3B) ----------------------------------------
+  // POST /api/accounts/:provider/login       -> start a login, returns the URL
+  // GET  /api/accounts/:provider/login/:id   -> poll; persists the credential
+  // POST /api/accounts/:provider/captcha     -> operator submits a captcha token
+  app.post('/api/accounts/:provider/login', async (c) => {
+    const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>))
+    const provider = c.req.param('provider')
+    const displayName = typeof body.displayName === 'string' ? body.displayName : undefined
+    return c.json(await login.begin(provider, displayName))
+  })
+  app.get('/api/accounts/:provider/login/:loginId', async (c) => {
+    return c.json(await login.poll(c.req.param('provider'), c.req.param('loginId')))
+  })
+  app.post('/api/accounts/:provider/captcha', async (c) => {
+    const provider = c.req.param('provider')
+    if (provider !== 'zcode') {
+      throw new OpenAIApiError(400, 'invalid_request_error', `provider "${provider}" does not use a captcha`)
+    }
+    const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>))
+    const verifyParam = typeof body.verify_param === 'string' ? body.verify_param : ''
+    if (verifyParam.trim().length === 0) {
+      throw new OpenAIApiError(400, 'invalid_request_error', 'verify_param is required')
+    }
+    ctx.captcha.submit(verifyParam)
+    return c.json({ ok: true, provider, expires_in: Math.floor(ctx.captcha.cacheTtl / 1000) })
+  })
+
   app.post('/api/accounts/:id/import-credential', async (c) => {
     const body = await c.req.json<Record<string, unknown>>()
     const expiresAt = typeof body.expiresAt === 'number' ? body.expiresAt : undefined
@@ -208,5 +238,5 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
     })
   }
 
-  return { app, chat, models, admin, listen }
+  return { app, chat, models, admin, login, listen }
 }

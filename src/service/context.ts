@@ -9,6 +9,7 @@ import type { ModelRouter } from '../core/router/model-router.js'
 import type { AccountPool } from '../core/pool/account-pool.js'
 import type { StoreGateway } from '../store/types.js'
 import type { GatewayConfig } from '../config/index.js'
+import type { ZCodeCaptchaManager } from '../providers/zcode/captcha.js'
 
 export interface ServiceContext {
   config: GatewayConfig
@@ -17,6 +18,8 @@ export interface ServiceContext {
   registry: ProviderRegistry
   router: ModelRouter
   pool: AccountPool
+  /** shared ZCode captcha token cache (manual submission only) */
+  captcha: ZCodeCaptchaManager
   now: () => number
 }
 
