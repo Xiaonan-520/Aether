@@ -1,0 +1,36 @@
+{
+  "name": "ai-account-gateway",
+  "version": "0.1.0",
+  "description": "Self-hosted, multi-provider, OpenAI-compatible AI gateway with unified account pool, token/quota management and failover.",
+  "type": "module",
+  "main": "dist/http/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsx watch src/http/index.ts",
+    "start": "node dist/http/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "migrate": "tsx scripts/migrate.ts"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.12.0",
+    "hono": "^4.6.5",
+    "jose": "^5.9.6",
+    "zod": "^3.23.8"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^11.3.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  },
+  "license": "MIT"
+}
