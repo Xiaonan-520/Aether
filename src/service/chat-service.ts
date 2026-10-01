@@ -49,6 +49,7 @@ export class ChatService {
           ref: a.credentialKey,
           expiresAt: a.tokenExpiryAt,
           refreshable: a.refreshable,
+          credential,
         }
       },
     }

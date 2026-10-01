@@ -28,6 +28,8 @@ export interface CredentialHandle {
   expiresAt: number | null
   /** whether this handle can be refreshed */
   refreshable: boolean
+  /** the decrypted credential JSON (provider-specific shape); undefined if absent */
+  credential?: unknown
 }
 
 export interface BeginLoginInput {
@@ -48,6 +50,12 @@ export interface PollLoginResult {
   success?: boolean
   loginUrl?: string
   error?: string
+  /** when success: the credential payload to persist for the account */
+  credential?: unknown
+  /** when success: access-token expiry (ms) */
+  expiresAt?: number | null
+  /** when success: a display name discovered during login */
+  displayName?: string
 }
 
 export interface RefreshResult {
@@ -60,7 +68,7 @@ export interface RefreshResult {
 
 export interface ProviderChatImpl {
   /** must be safe to call repeatedly (cached by callers) */
-  listModels(ctx: ProviderCtx): Promise<ModelEntry[]>
+  listModels(ctx: ProviderCtx, account: Account): Promise<ModelEntry[]>
   /** non-streaming convenience; adapters may implement via stream() */
   chat(
     ctx: ProviderCtx,
