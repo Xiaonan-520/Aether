@@ -58,8 +58,12 @@ const SCANS: ScanDefinition[] = [
     eligible: (a) => a.enabled && a.status !== 'needs_manual_action',
   },
   {
+    // Check-in status is polled every 30 minutes so an activity that opens
+    // later in the day is picked up. The adapter decides whether a claim is
+    // actually needed (status first); the executor closes the day on the first
+    // real claim attempt, so polling never re-claims.
     jobType: 'credit_claim',
-    intervalMs: 24 * 3_600_000,
+    intervalMs: 30 * 60_000,
     eligible: (a) => a.enabled && a.status !== 'needs_manual_action',
   },
   {

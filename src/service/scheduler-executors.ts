@@ -5,9 +5,12 @@
  * delegates to the provider adapter; the Scheduler itself owns retry, backoff,
  * cooldown and concurrency.
  *
- * credit_claim closes the day on the FIRST recorded attempt (any outcome), so a
- * failure never retries in a loop; the upstream reports "already claimed" as a
- * normal result.
+ * credit_claim is polled every 30 minutes. The adapter reads the authoritative
+ * status first and only claims when a claim is actually needed, so polling is
+ * cheap and safe. The day is closed by the first *real claim attempt*
+ * (success / already_claimed / failure / auth problem), which keeps retries
+ * bounded; a status-only `not_available` does not close the day, so an
+ * activity that opens later in the day is still picked up.
  */
 import type { Scheduler } from '../core/worker/scheduler.js'
 import type { ProviderRegistry } from '../core/registry/provider-registry.js'
@@ -58,7 +61,12 @@ export function registerSchedulerExecutors(
       return { skipped: 'already_attempted_today' }
     }
     const outcome = await adapter.ops.claimCredits(providerCtx(account.provider), account)
-    store.recordClaim(account.id, account.provider, 'credit_claim', at, outcome)
+    // `not_available` means no claim was attempted (e.g. the activity is not
+    // running), so it must NOT close the day: the 30-minute poll keeps
+    // checking. Any real attempt closes the day, bounding retries.
+    if (outcome.kind !== 'not_available') {
+      store.recordClaim(account.id, account.provider, 'credit_claim', at, outcome)
+    }
     if (outcome.kind === 'success') {
       store.patchAccount(account.id, { lastCreditClaimAt: at, status: 'active' })
     } else if (outcome.kind === 'needs_manual_action') {

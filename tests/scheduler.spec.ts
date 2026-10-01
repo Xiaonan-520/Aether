@@ -113,6 +113,20 @@ describe('scheduler — scans and enqueueing', () => {
     expect(h.store.listJobs('credit_claim')).toHaveLength(0)
   })
 
+  it('credit_claim scan runs every 30 minutes (not once a day)', async () => {
+    const h = setup([account({ id: 'a1' })], { supportsCredits: true })
+    await h.scheduler.tick()
+    expect(h.store.listJobs('credit_claim')).toHaveLength(1)
+
+    h.advance(29 * 60_000)
+    await h.scheduler.tick()
+    expect(h.store.listJobs('credit_claim')).toHaveLength(1) // still inside the interval
+
+    h.advance(61_000)
+    await h.scheduler.tick()
+    expect(h.store.listJobs('credit_claim')).toHaveLength(2)
+  })
+
   it('enqueues credit_claim only for providers declaring supportsCredits', async () => {
     const h = setup(
       [account({ id: 'a1' }), account({ id: 'a2', status: 'needs_manual_action' })],

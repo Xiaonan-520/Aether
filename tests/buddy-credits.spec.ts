@@ -232,6 +232,25 @@ describe('scheduler credit_claim end to end', () => {
     expect(h.store.getAccount(h.acc.id)?.account.lastCreditClaimAt).toBeTypeOf('number')
   })
 
+  it('inactive does not close the day: the 30-minute poll keeps checking without claiming', async () => {
+    const fetcher = fetcherFor([{ match: 'checkin-activity-status', json: INACTIVE }])
+    const h = harness(fetcher)
+    await h.scheduler.tick()
+    await h.settle()
+    const statusCalls = () => (fetcher as unknown as { mock: { calls: Array<[string]> } }).mock.calls
+      .filter((c) => String(c[0]).includes('checkin-activity-status')).length
+    expect(statusCalls()).toBe(1)
+    expect(claimPaths(fetcher)).toHaveLength(0)
+    // a status-only outcome must not record a claim, so the day stays open
+    expect(h.store.isClaimedToday(h.acc.id, 'credit_claim', dayKey(h.state.now))).toBe(false)
+
+    h.scheduler.enqueue('credit_claim', h.acc.id, 'workbuddy')
+    await h.scheduler.tick()
+    await h.settle()
+    expect(statusCalls()).toBe(2)           // polled again
+    expect(claimPaths(fetcher)).toHaveLength(0) // still never claims
+  })
+
   it('a failed attempt still closes the day (no retry loop)', async () => {
     const fetcher = fetcherFor([
       { match: 'checkin-activity-status', json: ACTIVE_TODAY_UNCLAIMED },
@@ -245,5 +264,29 @@ describe('scheduler credit_claim end to end', () => {
     await h.scheduler.tick()
     await h.settle()
     expect(claimPaths(fetcher)).toHaveLength(1) // no second attempt today
+  })
+})
+
+describe('architecture: the scheduler stays provider-agnostic', () => {
+  it('scheduler and executors mention no provider or WorkBuddy endpoint', async () => {
+    const fs = await import('node:fs')
+    const files = ['src/core/worker/scheduler.ts', 'src/service/scheduler-executors.ts']
+    const forbidden = [
+      'workbuddy', 'codebuddy', 'zcode', 'codearts',
+      'checkin-activity-status', 'daily-checkin', 'billing/meter', 'workbuddy.ai',
+    ]
+    for (const file of files) {
+      const text = fs.readFileSync(file, 'utf8').toLowerCase()
+      for (const needle of forbidden) {
+        expect(text.includes(needle), `${file} must not mention "${needle}"`).toBe(false)
+      }
+    }
+  })
+
+  it('the adapter owns the check-status-then-claim decision', async () => {
+    const fs = await import('node:fs')
+    const adapter = fs.readFileSync('src/providers/shared/buddy/provider.ts', 'utf8')
+    // status is read before any claim is attempted
+    expect(adapter.indexOf('fetchCheckinStatus')).toBeLessThan(adapter.indexOf('claimDailyCheckin(product'))
   })
 })
