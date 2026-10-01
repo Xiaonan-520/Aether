@@ -17,16 +17,35 @@ Gateway Core
   └── Scheduler（token_refresh / quota_sync / credit_claim / health_check）
 ```
 
-## 当前状态：Phase 3A（Gateway Core）完成
+## 当前状态：14 个 Provider 已接入，Docker/GHCR 已部署并运行
 
-- HTTP + OpenAI API + SSE 流式 ✅
+Gateway Core：
+- HTTP + OpenAI-compatible API（`/v1/models`、`/v1/chat/completions`，含 SSE 流式）✅
 - Account Pool 状态机 + failover ✅
 - SQLite + MemoryStore 双后端 ✅
-- Scheduler 框架 ✅
+- Scheduler（token_refresh / quota_sync / credit_claim / health_check）✅
 - 错误归一化 ✅
-- Dockerfile / docker-compose ✅（待 docker 环境实机验证）
-- GitHub Actions → GHCR 镜像流水线 ✅（`.github/workflows/docker.yml`）
-- **真实 Provider Adapter：未开始**（Phase 3B：CodeArts / CodeBuddy / WorkBuddy / ZCode）
+- Dockerfile / docker-compose（GHCR 拉取部署）✅
+- GitHub Actions → GHCR 镜像流水线（`.github/workflows/docker.yml`）✅
+- 测试：**353 passed / 29 files**；typecheck 与 build 均通过 ✅
+
+Provider Adapter（14 个，全部注册到 `/api/providers`）：
+
+```
+workbuddy        workbuddy-cn     codebuddy      buddy-intl
+zcode            lobsterai        cline          trae
+trae-intl        codearts         loomy          qoder
+qoder-cn         raccoon
+```
+
+- 共用 family adapter：`shared/buddy/`（4 产品）、`trae/`（2）、`qoder/`（2）；
+  其余各自独立协议实现。Core 中无 provider-specific 分支。
+- 已完成**真实账号**端到端验证：`workbuddy`、`workbuddy-cn`、`codebuddy`、`buddy-intl`。
+- 登录链路已修复但需人工浏览器授权才能完成：`qoder`、`qoder-cn`、`lobsterai`、
+  `trae`、`trae-intl`、`codearts`。
+- 外部阻塞 / 需人工：`cline`（外部注册页问题）、`raccoon`（需微信扫码）、
+  `loomy`（需手机号 SMS 登录）。
+- 详细状态、已知问题与交接说明见 **`HANDOFF.md`**。
 
 ## 快速开始
 
@@ -63,7 +82,9 @@ echo "<PAT>" | docker login ghcr.io -u <github-user> --password-stdin
 
 生产部署建议把 `GATEWAY_IMAGE_TAG` 固定为某个 `sha-<commit>` 标签，回滚即改回上一个标签并 `docker compose up -d`。
 
-数据（SQLite + 加密凭据）持久化在 `./data`。升级不会丢数据（schema_version 顺序迁移）。
+数据（SQLite + 加密凭据）持久化在 named volume `gateway-data`（容器内 `/data`）。
+升级不会丢数据（schema_version 顺序迁移）。**该 volume 与 `.env` 不在 GitHub 上**，
+重装前请自行备份（详见 `HANDOFF.md` §6）。
 
 ## API
 
@@ -82,7 +103,11 @@ GET    /api/accounts?provider=
 POST   /api/accounts                    # { provider, displayName?, credential?, providerMetadata? }
 PATCH  /api/accounts/:id
 DELETE /api/accounts/:id
-POST   /api/accounts/:id/import-credential   # { credential, expiresAt? }
+POST   /api/accounts/:provider/login             # { displayName?, phone? } 启动登录
+GET    /api/accounts/:provider/login/:loginId     # 轮询登录状态
+POST   /api/accounts/:provider/login/:loginId/credential  # { credential: {...} } 提交 code/refresh_token/AK-SK 完成交换
+POST   /api/accounts/:id/import-credential        # { credential, expiresAt? } 上传「已就绪」凭据
+POST   /api/accounts/:provider/captcha            # 仅 zcode：人工提交验证码 token
 GET    /api/jobs?type=
 GET    /api/events?limit=
 ```
@@ -109,9 +134,10 @@ GET /healthz
 
 ```bash
 npm run typecheck   # tsc --noEmit
-npm test            # vitest（102 个测试：store/pool/protocol/scheduler/service/http）
-npm run build       # tsc → dist/
+npm test            # vitest（353 个测试 / 29 个文件）
+npm run build       # tsc → dist/，随后 scripts/copy-assets.mjs 复制 Qoder WASM
 npm run migrate     # 手动执行 SQLite 迁移（启动时也会自动迁移）
+npm run dev         # tsx watch
 ```
 
 ## 安全与合规边界
@@ -120,11 +146,12 @@ npm run migrate     # 手动执行 SQLite 迁移（启动时也会自动迁移�
 - **不实现、不复制、不扩展任何验证码（CAPTCHA）绕过机制。** 上游要求 captcha 时，账号标记为 `needs_manual_action` 并返回结构化错误（`manual_action_required`），由管理员人工处理。
 - Credit claim 只使用平台正常提供的合法接口；当日已领取不重复调用。
 
-## 架构文档
+## 文档
 
-- `docs/HANDOFF.md` — 交接与当前实现状态
+- **`HANDOFF.md`（项目根目录）** — 交接文档：架构、14 个 Provider、部署、已知问题、
+  真实账号验证状态、Arch 重装后如何恢复。**新 Agent / 新会话请先读它。**
 - `docs/AUDIT_REPORT.md` — 原 deepseek-harness-codearts 源码审计
-- `docs/DESIGN_PHASE2.md` — 16 项设计（数据模型 / schema / 调度 / 路由）
+- `docs/DESIGN_PHASE2.md` — 早期设计（数据模型 / schema / 调度 / 路由）
 
 ## License
 
