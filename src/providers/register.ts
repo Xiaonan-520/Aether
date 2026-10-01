@@ -19,6 +19,7 @@ import { createCodeArtsProvider } from './codearts/index.js'
 import { createLoomyProvider } from './loomy/index.js'
 import { createQoderProvider } from './qoder/index.js'
 import { QODER, QODER_CN } from './qoder/product.js'
+import { createRaccoonProvider } from './raccoon/index.js'
 import { createZCodeProvider } from './zcode/index.js'
 import { ZCodeCaptchaManager } from './zcode/captcha.js'
 
@@ -50,5 +51,6 @@ export function registerProviders(
   registry.register(createLoomyProvider(options.fetcher ? { fetcher: options.fetcher } : {}))
   registry.register(createQoderProvider({ product: QODER, ...(options.fetcher ? { fetcher: options.fetcher } : {}) }))
   registry.register(createQoderProvider({ product: QODER_CN, ...(options.fetcher ? { fetcher: options.fetcher } : {}) }))
+  registry.register(createRaccoonProvider(options.fetcher ? { fetcher: options.fetcher } : {}))
   return { captcha }
 }
