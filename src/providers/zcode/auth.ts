@@ -114,17 +114,58 @@ export interface ZCodePollResult {
 }
 
 /** `GET /oauth/cli/poll/{flowId}` — one poll. */
+/** Raised when the OAuth poll is rate limited; the caller may retry after a delay. */
+export class ZCodePollRateLimitedError extends Error {
+  readonly status = 429
+  readonly retryAfterMs: number
+  constructor(retryAfterMs: number) {
+    super(`zcode oauth poll rate limited; retry after ${retryAfterMs}ms`)
+    this.name = 'ZCodePollRateLimitedError'
+    this.retryAfterMs = retryAfterMs
+  }
+}
+
+export interface ZCodePollOptions {
+  /** max retries when the poll is rate limited (default 3) */
+  maxRetries?: number
+  /** base backoff in ms (default 1000); doubles per attempt */
+  baseBackoffMs?: number
+  /** injected sleep so tests do not wait in real time */
+  sleep?: (ms: number) => Promise<void>
+}
+
 export async function pollOAuth(
   flowId: string,
   pollToken: string,
   fetcher: Fetcher = fetch,
   signal?: AbortSignal,
+  options: ZCodePollOptions = {},
 ): Promise<ZCodePollResult> {
-  const response = await fetcher(`${ZCODE_API_BASE}/oauth/cli/poll/${encodeURIComponent(flowId)}`, {
-    method: 'GET',
-    headers: { Authorization: `Bearer ${pollToken}` },
-    signal,
-  })
+  const maxRetries = options.maxRetries ?? 3
+  const baseBackoffMs = options.baseBackoffMs ?? 1_000
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  const url = `${ZCODE_API_BASE}/oauth/cli/poll/${encodeURIComponent(flowId)}`
+
+  let attempt = 0
+  let response: Response
+  for (;;) {
+    response = await fetcher(url, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${pollToken}` },
+      signal,
+    })
+    if (response.status !== 429) break
+    if (attempt >= maxRetries) {
+      // Surface a structured, retryable error instead of an unhandled throw.
+      const header = Number(response.headers.get('retry-after'))
+      const retryAfterMs = Number.isFinite(header) && header > 0 ? header * 1000 : baseBackoffMs * 2 ** attempt
+      throw new ZCodePollRateLimitedError(retryAfterMs)
+    }
+    const header = Number(response.headers.get('retry-after'))
+    const waitMs = Number.isFinite(header) && header > 0 ? header * 1000 : baseBackoffMs * 2 ** attempt
+    await sleep(waitMs)
+    attempt += 1
+  }
   if (!response.ok) throw new Error(`zcode oauth poll HTTP ${response.status}`)
   const json = (await response.json()) as Record<string, unknown>
   const data = (json.data ?? {}) as Record<string, unknown>

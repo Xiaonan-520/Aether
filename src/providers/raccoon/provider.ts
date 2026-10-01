@@ -222,6 +222,7 @@ export function createRaccoonProvider(options: RaccoonProviderOptions = {}): Pro
           return {
             expiresAt: raccoonCredentialExpiresAtMs(credential) ?? null,
             refreshable: isRaccoonRefreshable(credential),
+            credential,
           }
         }
         throw new UpstreamError({

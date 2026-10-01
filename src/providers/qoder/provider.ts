@@ -38,9 +38,14 @@ import {
   QODER_USERINFO_PATH,
 } from './product.js'
 import {
+  buildQoderAuthUrl,
   buildQoderCredential,
+  buildQoderPollUrl,
+  createQoderNonce,
+  createQoderPkce,
   isQoderRefreshable,
   newQoderMachineId,
+  type QoderPkce,
   parseQoderCampaigns,
   parseQoderTokenPayload,
   parseQoderUsage,
@@ -65,6 +70,10 @@ export interface QoderProviderOptions {
 
 interface LoginSession {
   machineId: string
+  /** PKCE pair; the verifier is required by the poll request */
+  pkce: QoderPkce
+  /** one-time CSRF nonce, echoed on the poll request */
+  nonce: string
   authUrl: string
   startedAt: number
   /** device-code challenge identifier returned by the select endpoint */
@@ -204,28 +213,23 @@ export function createQoderProvider(options: QoderProviderOptions = {}): Provide
     auth: {
       async beginLogin(input): Promise<BeginLoginResult> {
         const machineId = newQoderMachineId()
-        const challenge = randomChallenge()
-        const query = new URLSearchParams({
-          challenge,
-          challenge_method: 'S256',
-          nonce: randomChallenge(),
-          machine_id: machineId,
-          client_id: product.clientId,
-        })
-        const selectUrl = `${product.authBase}${QODER_DEVICE_SELECT_PATH}?${query.toString()}`
+        const pkce = createQoderPkce()
+        const nonce = createQoderNonce()
+        const authUrl = buildQoderAuthUrl({ machineId, nonce, pkce }, product)
         // Best-effort: the endpoint returns the account-selection page / flow id.
         let flowId: string | undefined
         try {
-          const res = await fetcher(selectUrl, { headers: qoderHeaders(undefined, product) })
+          const res = await fetcher(authUrl, { headers: qoderHeaders(undefined, product) })
           const json = (await res.json().catch(() => null)) as Record<string, unknown> | null
           const data = json && typeof json.data === 'object' && json.data !== null ? (json.data as Record<string, unknown>) : json
           if (data && typeof data.flow_id === 'string') flowId = data.flow_id
         } catch {
           // fall through: the operator can still complete the flow
         }
-        const authUrl = `${product.portalBase}/device?machine_id=${encodeURIComponent(machineId)}`
         sessions.set(input.accountId, {
           machineId,
+          pkce,
+          nonce,
           authUrl,
           startedAt: Date.now(),
           ...(flowId ? { flowId } : {}),
@@ -239,7 +243,7 @@ export function createQoderProvider(options: QoderProviderOptions = {}): Provide
           sessions.delete(accountId)
           return { done: true, success: false, error: 'device code expired' }
         }
-        const pollUrl = `${product.authBase}${QODER_POLL_PATH}?machine_id=${encodeURIComponent(session.machineId)}`
+        const pollUrl = buildQoderPollUrl(session, product)
         try {
           const res = await fetcher(pollUrl, { headers: qoderHeaders(undefined, product) })
           // the reference treats 404 as "user has not authorised yet"
@@ -271,6 +275,7 @@ export function createQoderProvider(options: QoderProviderOptions = {}): Provide
           return {
             expiresAt: qoderCredentialExpiresAtMs(credential) ?? null,
             refreshable: isQoderRefreshable(credential),
+            credential,
           }
         }
         const token = parseQoderTokenPayload(record)
@@ -282,7 +287,11 @@ export function createQoderProvider(options: QoderProviderOptions = {}): Provide
         }
         sessions.delete(accountId)
         const credential = buildQoderCredential(token, { machine_id: newQoderMachineId() })
-        return { expiresAt: qoderCredentialExpiresAtMs(credential) ?? null, refreshable: isQoderRefreshable(credential) }
+        return {
+          expiresAt: qoderCredentialExpiresAtMs(credential) ?? null,
+          refreshable: isQoderRefreshable(credential),
+          credential,
+        }
       },
     },
     ops: {
@@ -292,7 +301,7 @@ export function createQoderProvider(options: QoderProviderOptions = {}): Provide
         if (!isQoderRefreshable(credential)) {
           return { refreshable: false, expiresAt: null, refreshed: false, error: 'not refreshable' }
         }
-        const res = await fetcher(`${product.authBase}${QODER_REFRESH_PATH}`, {
+        const res = await fetcher(`${product.openApiBase}${QODER_REFRESH_PATH}`, {
           method: 'POST',
           headers: qoderHeaders(credential, product),
           body: JSON.stringify(qoderRefreshBody(credential)),
@@ -341,7 +350,7 @@ export function createQoderProvider(options: QoderProviderOptions = {}): Provide
       async healthCheck(ctx, account) {
         const credential = await credentialOf(ctx, account)
         if (!credential) return { ok: false, error: 'no credential' }
-        const res = await fetcher(`${product.authBase}${QODER_USERINFO_PATH}`, { headers: qoderHeaders(credential, product) })
+        const res = await fetcher(`${product.openApiBase}${QODER_USERINFO_PATH}`, { headers: qoderHeaders(credential, product) })
         if (res.status === 401 || res.status === 403) return { ok: false, error: `HTTP ${res.status}` }
         return { ok: res.ok || res.status === 404 }
       },
@@ -375,12 +384,6 @@ export function createQoderProvider(options: QoderProviderOptions = {}): Provide
       },
     },
   }
-}
-
-function randomChallenge(): string {
-  const bytes = new Uint8Array(32)
-  globalThis.crypto.getRandomValues(bytes)
-  return Buffer.from(bytes).toString('base64url')
 }
 
 export { QODER_CAMPAIGNS_PATH, QODER_CHAT_PATH, QODER_ENCRYPTED_INFER_PATH, parseQoderCampaigns }

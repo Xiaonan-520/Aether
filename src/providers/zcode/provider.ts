@@ -28,6 +28,7 @@ import type {
 import { UpstreamError } from '../../core/errors/upstream-error.js'
 import { ZCodeCaptchaManager, ZCodeCaptchaUnavailableError } from './captcha.js'
 import {
+  ZCodePollRateLimitedError,
   ZCODE_QUOTA,
   authHeaders,
   normalizeImportedCredential,
@@ -293,7 +294,17 @@ export function createZCodeProvider(options: ZCodeProviderOptions = {}): Provide
           sessions.delete(accountId)
           return { done: true, success: false, error: 'login timed out' }
         }
-        const result = await pollOAuth(session.flowId, session.pollToken, fetcher)
+        let result
+        try {
+          result = await pollOAuth(session.flowId, session.pollToken, fetcher)
+        } catch (err) {
+          // A rate-limited poll is transient: report pending with a structured
+          // message instead of throwing an unhandled error out of the HTTP layer.
+          if (err instanceof ZCodePollRateLimitedError) {
+            return { done: false, error: `upstream rate limited; retry in ${Math.ceil(err.retryAfterMs / 1000)}s` }
+          }
+          throw err
+        }
         if (!result.ready) return { done: false }
         sessions.delete(accountId)
         const credential: ZCodeCredential = {
@@ -312,7 +323,7 @@ export function createZCodeProvider(options: ZCodeProviderOptions = {}): Provide
       },
       async importCredential(_accountId: string, _provider: string, payload: unknown) {
         const credential = normalizeImportedCredential(payload)
-        return { expiresAt: null, refreshable: false }
+        return { expiresAt: null, refreshable: false, credential }
       },
     },
     ops: {

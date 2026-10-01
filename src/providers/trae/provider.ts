@@ -218,6 +218,7 @@ export function createTraeProvider(options: TraeProviderOptions = {}): Provider 
           return {
             expiresAt: credential.expires_at ? Number(credential.expires_at) : null,
             refreshable: typeof credential.refresh_token === 'string' && credential.refresh_token.length > 0,
+            credential,
           }
         }
         const refreshToken = typeof record.refresh_token === 'string' ? record.refresh_token : undefined
@@ -229,9 +230,13 @@ export function createTraeProvider(options: TraeProviderOptions = {}): Provider 
         }
         const device = newTraeDeviceIdentity()
         const exchange = await exchangeToken(product, { refresh_token: refreshToken, machine_id: device.machine_id, device_id: device.device_id }, fetcher)
-        const credential = buildCredential(exchange, { ...device, refresh_token: refreshToken })
+        const credential = buildCredential(exchange, { ...device, refresh_token: refreshToken, expires_at: String(Date.now() + 3_600_000) })
         sessions.delete(accountId)
-        return { expiresAt: null, refreshable: credential.refresh_token.length > 0 }
+        return {
+          expiresAt: credential.expires_at ? Number(credential.expires_at) : null,
+          refreshable: credential.refresh_token.length > 0,
+          credential,
+        }
       },
     },
     ops: {

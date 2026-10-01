@@ -282,3 +282,74 @@ describe('buddy upstream compatibility contract', () => {
     expect(result.usage).toEqual({ promptTokens: 7, completionTokens: 4 })
   })
 })
+
+describe('buddy refresh — persistence regression', () => {
+  // Regression: the upstream ROTATES the refresh token on every refresh
+  // (verified live against a real account), and `refreshAccount` used to
+  // compute the new credential but return it nowhere, so the stored token
+  // drifted from upstream forever.
+  it('returns the rotated credential (access, refresh and both expiries)', async () => {
+    const fetcher = fetcherFor([
+      {
+        match: '/v2/plugin/auth/token/refresh',
+        json: {
+          code: 0,
+          data: {
+            accessToken: 'access-2',
+            refreshToken: 'refresh-2',
+            expiresIn: 3600,
+            refreshExpiresIn: 7200,
+            domain: 'www.workbuddy.ai',
+          },
+        },
+      },
+    ])
+    const provider = createWorkBuddyProvider(fetcher)
+    const account = {
+      id: 'workbuddy-a1', provider: 'workbuddy', displayName: 'wb', status: 'active', enabled: true,
+      authenticated: true, tokenExpiryAt: null, refreshable: true, credentialKey: 'CRED',
+      failureCount: 0, lastSuccessAt: null, lastFailureAt: null, lastError: null, cooldownUntil: null,
+      modelRateLimits: {}, quotaJson: null, lastQuotaAt: null, lastCreditClaimAt: null,
+      quotaManualRequired: false, providerMetadataJson: null, createdAt: 0, updatedAt: 0,
+    }
+    const result = await provider.ops.refreshAccount(ctxFor('workbuddy'), account)
+    expect(result.refreshed).toBe(true)
+    expect(result.credential).toBeDefined()
+    const next = result.credential as {
+      access_token: string
+      refresh_token: string
+      expires_at: number
+      refresh_expires_at: number
+      user_id: string
+      nickname: string
+    }
+    // both tokens rotated and the identity was preserved
+    expect(next.access_token).toBe('access-2')
+    expect(next.refresh_token).toBe('refresh-2')
+    expect(next.access_token).not.toBe(CREDENTIAL.access_token)
+    expect(next.refresh_token).not.toBe(CREDENTIAL.refresh_token)
+    expect(next.user_id).toBe('u1')
+    expect(next.nickname).toBe('Nina')
+    // refresh_expires_at is carried alongside expires_at
+    expect(typeof next.expires_at).toBe('number')
+    expect(typeof next.refresh_expires_at).toBe('number')
+    expect(next.refresh_expires_at).toBeGreaterThan(next.expires_at)
+  })
+
+  it('does not fabricate a credential when the refresh is not possible', async () => {
+    const provider = createWorkBuddyProvider(fetcherFor([]))
+    const noCredCtx: ProviderCtx = {
+      provider: 'workbuddy',
+      resolveCredential: async () => undefined,
+    }
+    const result = await provider.ops.refreshAccount(noCredCtx, {
+      id: 'x', provider: 'workbuddy', displayName: 'x', status: 'active', enabled: true,
+      authenticated: false, tokenExpiryAt: null, refreshable: false, credentialKey: 'C',
+      failureCount: 0, lastSuccessAt: null, lastFailureAt: null, lastError: null, cooldownUntil: null,
+      modelRateLimits: {}, quotaJson: null, lastQuotaAt: null, lastCreditClaimAt: null,
+      quotaManualRequired: false, providerMetadataJson: null, createdAt: 0, updatedAt: 0,
+    })
+    expect(result.refreshed).toBe(false)
+    expect(result.credential).toBeUndefined()
+  })
+})

@@ -266,10 +266,11 @@ export function createLobsteraiProvider(options: LobsteraiProviderOptions = {}):
             latest_keyfrom: String(Date.now()),
           })
           sessions.delete(accountId)
-          sessions.set(accountId, { ...(session as LoginSession), authUrl: '' })
           return {
             expiresAt: lobsteraiCredentialExpiresAtMs(credential) ?? null,
             refreshable: isLobsteraiRefreshable(credential),
+            credential,
+            ...(credential.nickname ? { displayName: credential.nickname } : {}),
           }
         }
         // Path 2: a ready credential blob (disk-credential / manual import).
@@ -278,6 +279,7 @@ export function createLobsteraiProvider(options: LobsteraiProviderOptions = {}):
           return {
             expiresAt: lobsteraiCredentialExpiresAtMs(credential) ?? null,
             refreshable: isLobsteraiRefreshable(credential),
+            credential,
           }
         }
         throw new UpstreamError({

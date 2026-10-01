@@ -224,6 +224,7 @@ export function createLoomyProvider(options: LoomyProviderOptions = {}): Provide
           return {
             expiresAt: record.expires_at ? Number(record.expires_at) : null,
             refreshable: false,
+            credential: record,
           }
         }
         const mcode = typeof record.mcode === 'string' ? record.mcode : typeof record.code === 'string' ? record.code : undefined
@@ -258,7 +259,7 @@ export function createLoomyProvider(options: LoomyProviderOptions = {}): Provide
           ...(typeof envelope.data.nickname === 'string' ? { nickname: envelope.data.nickname } : {}),
         }
         session.credential = credential
-        return { expiresAt: Number(credential.expires_at), refreshable: false }
+        return { expiresAt: Number(credential.expires_at), refreshable: false, credential }
       },
     },
     ops: {

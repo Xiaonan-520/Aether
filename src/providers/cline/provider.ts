@@ -315,6 +315,7 @@ export function createClineProvider(options: ClineProviderOptions = {}): Provide
           return {
             expiresAt: clineCredentialExpiresAtMs(credential) ?? null,
             refreshable: isClineRefreshable(credential),
+            credential,
           }
         }
         const token = parseClineTokenPayload(record)
@@ -328,6 +329,7 @@ export function createClineProvider(options: ClineProviderOptions = {}): Provide
         return {
           expiresAt: clineCredentialExpiresAtMs(credential) ?? null,
           refreshable: isClineRefreshable(credential),
+          credential,
         }
       },
     },

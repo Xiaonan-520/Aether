@@ -224,7 +224,7 @@ export function createCodeArtsProvider(options: CodeArtsProviderOptions = {}): P
         }
         sessions.delete(accountId)
         const expiresAt = credential.expires_at ? Number(credential.expires_at) : null
-        return { expiresAt: Number.isFinite(expiresAt) ? expiresAt : null, refreshable: false }
+        return { expiresAt: Number.isFinite(expiresAt) ? expiresAt : null, refreshable: false, credential }
       },
     },
     ops: {

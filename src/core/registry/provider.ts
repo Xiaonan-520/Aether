@@ -100,7 +100,24 @@ export interface ProviderAuthImpl {
   beginLogin?(input: BeginLoginInput): Promise<BeginLoginResult>
   pollLogin?(accountId: string, provider: string): Promise<PollLoginResult>
   /** upload a credential blob for an account (disk-credential / import modes) */
-  importCredential?(accountId: string, provider: string, payload: unknown): Promise<{ expiresAt: number | null; refreshable: boolean }>
+  /**
+   * Import / exchange a credential for an account.
+   *
+   * The payload is provider-specific (an auth code, a refresh token, an AK/SK
+   * blob, or a ready credential). When the adapter produced a credential from
+   * that payload it MUST return it as `credential` so the caller can persist
+   * it; a provider that merely validates a ready blob may omit it.
+   */
+  importCredential?(accountId: string, provider: string, payload: unknown): Promise<ImportCredentialResult>
+}
+
+export interface ImportCredentialResult {
+  expiresAt: number | null
+  refreshable: boolean
+  /** when set, the credential the caller must persist for the account */
+  credential?: unknown
+  /** when set, a display name discovered during the exchange */
+  displayName?: string
 }
 
 export interface ProviderOpsImpl {

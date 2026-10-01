@@ -6,6 +6,7 @@
  * `COSY` signature and encrypted body. Device identity is asserted to be
  * account-scoped and persisted.
  */
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
   QODER,
@@ -18,7 +19,11 @@ import {
   qoderProductById,
 } from '../src/providers/qoder/product.js'
 import {
+  buildQoderAuthUrl,
   buildQoderCredential,
+  buildQoderPollUrl,
+  createQoderNonce,
+  createQoderPkce,
   isQoderRefreshable,
   newQoderMachineId,
   parseQoderCampaigns,
@@ -101,6 +106,67 @@ describe('qoder wasm (real binary)', () => {
     const a = await make('11111111-1111-4111-8111-111111111111')
     const b = await make('22222222-2222-4222-8222-222222222222')
     expect(a).not.toBe(b)
+  })
+})
+
+describe('qoder PKCE + host separation (regression)', () => {
+  it('creates a PKCE pair with a base64url challenge and no padding', () => {
+    const pkce = createQoderPkce()
+    expect(pkce.verifier.length).toBeGreaterThanOrEqual(43)
+    expect(pkce.verifier.length).toBeLessThanOrEqual(128)
+    expect(pkce.verifier).toMatch(/^[A-Za-z0-9._~-]+$/)
+    expect(pkce.challenge).toMatch(/^[A-Za-z0-9_-]+$/)
+    expect(pkce.challenge).not.toContain('=')
+    expect(createQoderPkce().verifier).not.toBe(pkce.verifier)
+    // challenge is base64url(sha256(verifier))
+    const expected = createHash('sha256').update(pkce.verifier).digest('base64')
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+    expect(pkce.challenge).toBe(expected)
+  })
+
+  it('builds the auth URL on authBase with challenge_method=S256, nonce, machine_id, client_id', () => {
+    const url = buildQoderAuthUrl({ machineId: 'm1', nonce: 'n1', pkce: { verifier: 'v', challenge: 'c' } }, QODER)
+    expect(new URL(url).host).toBe('qoder.com')
+    expect(url).toContain('challenge=c')
+    expect(url).toContain('challenge_method=S256')
+    expect(url).toContain('nonce=n1')
+    expect(url).toContain('machine_id=m1')
+    expect(url).toContain('client_id=')
+  })
+
+  it('builds the poll URL on openApiBase carrying nonce + verifier (was 400 DeviceTokenNonceRequired)', () => {
+    // Regression: the poll endpoint rejects a request without `nonce`
+    // (HTTP 400 DeviceTokenNonceRequired), verified live upstream.
+    const url = buildQoderPollUrl({ nonce: 'n1', pkce: { verifier: 'v1', challenge: 'c' } }, QODER)
+    expect(new URL(url).host).toBe('openapi.qoder.sh')
+    expect(url).toContain('nonce=n1')
+    expect(url).toContain('verifier=v1')
+    expect(url).toContain('challenge_method=S256')
+    expect(url).not.toContain('machine_id=')
+  })
+
+  it('separates authBase from openApiBase for both products', () => {
+    expect(QODER.authBase).not.toBe(QODER.openApiBase)
+    expect(QODER_CN.authBase).not.toBe(QODER_CN.openApiBase)
+    expect(new URL(buildQoderPollUrl({ nonce: 'n', pkce: { verifier: 'v', challenge: 'c' } }, QODER_CN)).host)
+      .toBe('openapi.qoder.com.cn')
+    expect(new URL(buildQoderAuthUrl({ machineId: 'm', nonce: 'n', pkce: { verifier: 'v', challenge: 'c' } }, QODER_CN)).host)
+      .toBe('qoder.cn')
+  })
+
+  it('refreshes and reads userinfo on openApiBase', async () => {
+    const calls: string[] = []
+    const fetcher = makeFetcher(
+      [
+        { match: QODER_REFRESH_PATH, json: { data: { access_token: 'a2', refresh_token: 'r2' } } },
+        { match: '/api/v1/userinfo', json: { data: {} } },
+      ],
+      (u) => calls.push(u),
+    )
+    const p = createQoderProvider({ fetcher })
+    await p.ops.refreshAccount!(ctx(), account())
+    await p.ops.healthCheck!(ctx(), account())
+    expect(calls.every((u) => u.includes('openapi.qoder.sh'))).toBe(true)
   })
 })
 

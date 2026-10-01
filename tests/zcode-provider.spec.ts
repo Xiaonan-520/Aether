@@ -211,3 +211,60 @@ describe('zcode login and credential import', () => {
     expect(quota.total).toBe(100)
   })
 })
+
+
+describe('zcode oauth poll — rate limit handling (regression)', () => {
+  it('retries on 429 with backoff and then succeeds', async () => {
+    let calls = 0
+    const waits: number[] = []
+    const fetcher = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/oauth/cli/poll/')) {
+        calls += 1
+        if (calls < 3) return new Response('{}', { status: 429, headers: { 'retry-after': '1' } })
+        return new Response(JSON.stringify({ data: { status: 'ready', token: 'jwt-tok' } }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        })
+      }
+      return new Response(JSON.stringify({ code: 0, data: { flowId: 'f1', authorizeUrl: 'https://x/auth' } }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      })
+    }) as unknown as typeof fetch
+    const { pollOAuth } = await import('../src/providers/zcode/auth.js')
+    const result = await pollOAuth('f1', 'poll-tok', fetcher, undefined, {
+      sleep: async (ms) => { waits.push(ms) },
+    })
+    expect(result.ready).toBe(true)
+    expect(result.jwtToken).toBe('jwt-tok')
+    expect(calls).toBe(3)
+    // `retry-after` (1s) is honoured per attempt and is authoritative
+    expect(waits).toEqual([1000, 1000])
+  })
+
+  it('falls back to exponential backoff when no retry-after header is present', async () => {
+    const waits: number[] = []
+    let calls = 0
+    const fetcher = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/oauth/cli/poll/')) {
+        calls += 1
+        if (calls < 3) return new Response('{}', { status: 429 })
+        return new Response(JSON.stringify({ data: { status: 'ready', token: 't' } }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        })
+      }
+      return new Response('{}', { status: 200 })
+    }) as unknown as typeof fetch
+    const { pollOAuth } = await import('../src/providers/zcode/auth.js')
+    await pollOAuth('f1', 'tok', fetcher, undefined, { sleep: async (ms) => { waits.push(ms) } })
+    expect(waits).toEqual([1000, 2000])
+  })
+
+  it('raises a structured rate-limit error after exhausting retries', async () => {
+    const fetcher = (async () => new Response('{}', { status: 429, headers: { 'retry-after': '2' } })) as unknown as typeof fetch
+    const { pollOAuth, ZCodePollRateLimitedError } = await import('../src/providers/zcode/auth.js')
+    await expect(
+      pollOAuth('f1', 'poll-tok', fetcher, undefined, { maxRetries: 1, sleep: async () => {} }),
+    ).rejects.toBeInstanceOf(ZCodePollRateLimitedError)
+  })
+})

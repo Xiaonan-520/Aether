@@ -326,7 +326,17 @@ export function createBuddyProvider(product: BuddyProduct, fetcher: Fetcher = fe
             enterpriseId: credential.enterprise_id,
             accountType: credential.account_type,
           })
-          return { refreshable: true, expiresAt: credentialExpiresAtMs(next) ?? null, refreshed: true }
+          // The upstream ROTATES the refresh token on every refresh (verified
+          // live), so the new credential MUST be handed back for persistence —
+          // otherwise the stored token drifts from upstream. `next` carries both
+          // the new access_token/expires_at and the new
+          // refresh_token/refresh_expires_at.
+          return {
+            refreshable: true,
+            expiresAt: credentialExpiresAtMs(next) ?? null,
+            refreshed: true,
+            credential: next,
+          }
         } catch (err) {
           if (err instanceof BuddyRefreshExpiredError) {
             throw new UpstreamError({ kind: 'TERMINAL', message: `buddy refresh token expired: ${err.message}` })

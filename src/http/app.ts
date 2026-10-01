@@ -176,6 +176,15 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
   app.get('/api/accounts/:provider/login/:loginId', async (c) => {
     return c.json(await login.poll(c.req.param('provider'), c.req.param('loginId')))
   })
+  // POST /api/accounts/:provider/login/:id/credential
+  //   Finish a login that cannot complete by polling alone: the body carries the
+  //   provider-specific payload (auth code / refresh token / AK-SK). The adapter
+  //   performs the exchange; the service persists the returned credential.
+  app.post('/api/accounts/:provider/login/:loginId/credential', async (c) => {
+    const body = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>))
+    const payload = body.credential !== undefined ? body.credential : body
+    return c.json(await login.submitCredential(c.req.param('provider'), c.req.param('loginId'), payload))
+  })
   app.post('/api/accounts/:provider/captcha', async (c) => {
     const provider = c.req.param('provider')
     if (provider !== 'zcode') {
@@ -191,9 +200,19 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
   })
 
   app.post('/api/accounts/:id/import-credential', async (c) => {
-    const body = await c.req.json<Record<string, unknown>>()
+    const body = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>))
+    // A ready credential blob is required here; a bare/missing body is a client
+    // error, not a 500 from the encryption layer.
+    const credential = body.credential
+    if (credential === undefined || credential === null || typeof credential !== 'object') {
+      throw new OpenAIApiError(
+        400,
+        'invalid_request_error',
+        'missing "credential" object in request body',
+      )
+    }
     const expiresAt = typeof body.expiresAt === 'number' ? body.expiresAt : undefined
-    return c.json(admin.importCredential(c.req.param('id'), body.credential, expiresAt ?? null))
+    return c.json(admin.importCredential(c.req.param('id'), credential, expiresAt ?? null))
   })
   app.get('/api/jobs', (c) => {
     const jobType = c.req.query('type') || undefined

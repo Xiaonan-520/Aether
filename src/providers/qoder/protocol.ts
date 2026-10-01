@@ -5,8 +5,12 @@
  * Verified reference (jet-hub src/qoder.ts / qoder-product.ts).
  * The encrypted inference path lives in wasm.ts + provider.ts.
  */
-import { randomUUID } from 'node:crypto'
-import type { QoderProduct } from './product.js'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import {
+  QODER_DEVICE_SELECT_PATH,
+  QODER_POLL_PATH,
+  type QoderProduct,
+} from './product.js'
 
 export type Fetcher = typeof fetch
 
@@ -28,6 +32,78 @@ export interface QoderCredential {
 /** Generate a fresh account-scoped machine id (persisted for the account's life). */
 export function newQoderMachineId(): string {
   return randomUUID()
+}
+
+/** PKCE unreserved alphabet (RFC 7636), matching the reference exactly. */
+const PKCE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~'
+
+export interface QoderPkce {
+  /** plaintext verifier, submitted on the poll request */
+  verifier: string
+  /** base64url(sha256(verifier)) without padding */
+  challenge: string
+}
+
+/** Create a PKCE verifier/challenge pair. */
+export function createQoderPkce(random: () => number = Math.random): QoderPkce {
+  const length = 43 + Math.floor(86 * random())
+  const bytes = randomBytes(length)
+  let verifier = ''
+  for (let i = 0; i < length; i += 1) {
+    verifier += PKCE_ALPHABET[bytes[i]! % PKCE_ALPHABET.length]
+  }
+  const challenge = createHash('sha256')
+    .update(verifier)
+    .digest('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '')
+  return { verifier, challenge }
+}
+
+/** One-time CSRF nonce for the device flow. */
+export function createQoderNonce(): string {
+  return randomUUID()
+}
+
+/**
+ * Build the browser authorization URL.
+ *
+ * MUST carry `challenge`, `challenge_method`, `nonce`, `machine_id` and
+ * `client_id` — the poll request later needs the matching verifier+nonce, so
+ * both are persisted in the login session.
+ */
+export function buildQoderAuthUrl(
+  session: { machineId: string; nonce: string; pkce: QoderPkce },
+  product: QoderProduct,
+): string {
+  const query = new URLSearchParams({
+    challenge: session.pkce.challenge,
+    challenge_method: 'S256',
+    nonce: session.nonce,
+    machine_id: session.machineId,
+    client_id: product.clientId,
+  })
+  return `${product.authBase}${QODER_DEVICE_SELECT_PATH}?${query.toString()}`
+}
+
+/**
+ * Build the device-token poll URL.
+ *
+ * Lives on `openApiBase` (NOT `authBase`): verified live, the poll endpoint
+ * rejects a request without `nonce` (HTTP 400 `DeviceTokenNonceRequired`),
+ * so nonce + verifier + challenge_method are all mandatory.
+ */
+export function buildQoderPollUrl(
+  session: { nonce: string; pkce: QoderPkce },
+  product: QoderProduct,
+): string {
+  const query = new URLSearchParams({
+    nonce: session.nonce,
+    verifier: session.pkce.verifier,
+    challenge_method: 'S256',
+  })
+  return `${product.openApiBase}${QODER_POLL_PATH}?${query.toString()}`
 }
 
 export function isQoderRefreshable(credential: QoderCredential): boolean {

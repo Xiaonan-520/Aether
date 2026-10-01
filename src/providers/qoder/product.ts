@@ -10,8 +10,10 @@
 export interface QoderProduct {
   id: 'qoder' | 'qoder-cn'
   displayName: string
-  /** auth/device-code + userinfo host */
+  /** browser authorization origin (device select page lives here) */
   authBase: string
+  /** openapi host: device poll, refresh and userinfo all live here */
+  openApiBase: string
   /** encrypted inference host (must be the api2 family; api2-v2 404s) */
   inferHost: string
   /** `/sash/` endpoints (usage, activities) — holds Cosy-ClientType */
@@ -39,7 +41,8 @@ export const QODER_COSY_VERSION = '1.0.0'
 export const QODER: QoderProduct = {
   id: 'qoder',
   displayName: 'Qoder',
-  authBase: 'https://openapi.qoder.sh',
+  authBase: 'https://qoder.com',
+  openApiBase: 'https://openapi.qoder.sh',
   inferHost: 'https://api2.qoder.sh',
   sashBase: 'https://api2.qoder.sh',
   portalBase: 'https://qoder.com',
@@ -59,7 +62,8 @@ export const QODER: QoderProduct = {
 export const QODER_CN: QoderProduct = {
   id: 'qoder-cn',
   displayName: 'Qoder (国内版)',
-  authBase: 'https://openapi.qoder.com.cn',
+  authBase: 'https://qoder.cn',
+  openApiBase: 'https://openapi.qoder.com.cn',
   inferHost: 'https://api2-v2.qoder.sh',
   sashBase: 'https://gateway.qoder.com.cn',
   portalBase: 'https://qoder.cn',

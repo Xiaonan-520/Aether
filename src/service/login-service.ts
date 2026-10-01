@@ -159,6 +159,86 @@ export class LoginService {
     }
   }
 
+  /**
+   * Finish a login by handing a provider-specific payload to the adapter.
+   *
+   * Providers whose login flow cannot complete by polling alone (an auth code
+   * from a loopback callback, a refresh token, an AK/SK blob) implement
+   * `auth.importCredential`. The adapter performs the exchange and returns the
+   * credential; this method persists it and syncs models, exactly like a
+   * successful poll. HTTP concerns stay here; the exchange stays in the adapter.
+   */
+  async submitCredential(provider: string, loginId: string, payload: unknown): Promise<LoginPollResult> {
+    const adapter = this.ctx.registry.get(provider)
+    if (!adapter) throw new OpenAIApiError(404, 'invalid_request_error', `unknown provider "${provider}"`)
+    if (!adapter.auth.importCredential) {
+      throw new OpenAIApiError(
+        400,
+        'invalid_request_error',
+        `provider "${provider}" does not support credential submission`,
+      )
+    }
+    const stored = this.ctx.store.getAccount(loginId)
+    if (!stored || stored.account.provider !== provider) {
+      throw new OpenAIApiError(404, 'invalid_request_error', `unknown login "${loginId}"`)
+    }
+    if (payload === undefined || payload === null || typeof payload !== 'object') {
+      throw new OpenAIApiError(400, 'invalid_request_error', 'missing "credential" object in request body')
+    }
+
+    let result
+    try {
+      result = await adapter.auth.importCredential(loginId, provider, payload)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      this.ctx.store.patchAccount(loginId, {
+        status: 'needs_manual_action',
+        lastError: message,
+        updatedAt: this.ctx.now(),
+      })
+      this.ctx.store.addEvent({
+        ts: this.ctx.now(), level: 'warn', provider, accountId: loginId,
+        kind: 'login.credential_rejected', message,
+      })
+      throw new OpenAIApiError(400, 'invalid_request_error', message)
+    }
+
+    const account = stored.account
+    const patch = {
+      authenticated: true,
+      status: 'active' as const,
+      refreshable: result.refreshable,
+      tokenExpiryAt: result.expiresAt ?? null,
+      lastError: null,
+      ...(result.displayName ? { displayName: result.displayName } : {}),
+      updatedAt: this.ctx.now(),
+    }
+    if (result.credential !== undefined) {
+      storeCredentialJson(this.ctx, account, result.credential)
+    } else if (resolveCredentialJson(this.ctx, account) === undefined) {
+      throw new OpenAIApiError(
+        400,
+        'invalid_request_error',
+        'provider did not return a credential; nothing to persist',
+      )
+    }
+    this.ctx.store.patchAccount(loginId, patch)
+    if (result.displayName) account.displayName = result.displayName
+
+    const modelsSynced = await this.syncModels(provider, { ...account, ...patch })
+    this.ctx.store.addEvent({
+      ts: this.ctx.now(), level: 'info', provider, accountId: loginId, kind: 'login.succeeded',
+      message: `login succeeded for ${provider} via credential submission (${modelsSynced} models)`,
+    })
+    return {
+      login_id: loginId,
+      provider,
+      status: 'success',
+      account: this.redact({ ...account, ...patch }),
+      models_synced: modelsSynced,
+    }
+  }
+
   /** Pull the provider catalog into the models table for one account. */
   async syncModels(provider: string, account: Account): Promise<number> {
     const adapter = this.ctx.registry.get(provider)
