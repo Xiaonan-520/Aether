@@ -496,6 +496,22 @@ export class SqliteStore implements StoreGateway {
     return row !== undefined
   }
 
+  lastClaimOutcome(accountId: string, type: string, dateKey: string): ClaimOutcome | null {
+    const row = this.db
+      .prepare(
+        `SELECT outcome_json FROM credit_claims
+         WHERE account_id = ? AND claim_type = ? AND claim_date = ?
+         ORDER BY id DESC LIMIT 1`,
+      )
+      .get(accountId, type, dateKey) as { outcome_json: string } | undefined
+    if (!row) return null
+    try {
+      return JSON.parse(row.outcome_json) as ClaimOutcome
+    } catch {
+      return null
+    }
+  }
+
   // -- jobs -------------------------------------------------------------------
   createJob(job: Job): void {
     this.db

@@ -251,6 +251,21 @@ describe('scheduler credit_claim end to end', () => {
     expect(claimPaths(fetcher)).toHaveLength(0) // still never claims
   })
 
+  it('ignores a legacy status-only row: a not_available claim does not close the day', async () => {
+    const fetcher = fetcherFor([
+      { match: 'checkin-activity-status', json: ACTIVE_TODAY_UNCLAIMED },
+      { match: 'daily-checkin', json: { code: 0, data: { credit: 100 } } },
+    ])
+    const h = harness(fetcher)
+    // simulate a row written by an older version that recorded status-only outcomes
+    h.store.recordClaim(h.acc.id, 'workbuddy', 'credit_claim', h.state.now, { kind: 'not_available', message: 'legacy' })
+    await h.scheduler.tick()
+    await h.settle()
+    // the legacy row must not block a real claim
+    expect(claimPaths(fetcher)).toHaveLength(1)
+    expect(h.store.lastClaimOutcome(h.acc.id, 'credit_claim', dayKey(h.state.now))?.kind).toBe('success')
+  })
+
   it('a failed attempt still closes the day (no retry loop)', async () => {
     const fetcher = fetcherFor([
       { match: 'checkin-activity-status', json: ACTIVE_TODAY_UNCLAIMED },

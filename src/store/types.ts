@@ -71,6 +71,8 @@ export interface StoreGateway {
   /** Credit claim history (idempotency). */
   recordClaim(accountId: string, provider: string, type: string, at: number, outcome: ClaimOutcome): void
   isClaimedToday(accountId: string, type: string, dateKey: string): boolean
+  /** Most recent recorded outcome for (account, type, day); null when none. */
+  lastClaimOutcome(accountId: string, type: string, dateKey: string): ClaimOutcome | null
 
   /** Background job queue. */
   createJob(job: Job): void

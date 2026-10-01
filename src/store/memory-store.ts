@@ -137,6 +137,13 @@ export class MemoryStore implements StoreGateway {
     )
   }
 
+  lastClaimOutcome(accountId: string, type: string, dateKey: string): ClaimOutcome | null {
+    const matches = this.claims.filter(
+      (c) => c.accountId === accountId && c.type === type && dayKey(c.at) === dateKey,
+    )
+    return matches.length > 0 ? matches[matches.length - 1].outcome : null
+  }
+
   createJob(job: Job): void {
     this.jobs.set(job.id, { ...job })
   }

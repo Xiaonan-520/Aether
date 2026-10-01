@@ -57,7 +57,8 @@ export function registerSchedulerExecutors(
     // (and stays testable) rather than wall-clock time.
     const at = job.scheduledAt ?? Date.now()
     const today = dayKey(at)
-    if (store.isClaimedToday(account.id, 'credit_claim', today)) {
+    const last = store.lastClaimOutcome(account.id, 'credit_claim', today)
+    if (last !== null && last.kind !== 'not_available') {
       return { skipped: 'already_attempted_today' }
     }
     const outcome = await adapter.ops.claimCredits(providerCtx(account.provider), account)
