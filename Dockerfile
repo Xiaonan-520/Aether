@@ -12,6 +12,8 @@ COPY package.json package-lock.json .npmrc ./
 RUN npm ci --include=optional
 COPY tsconfig.json ./
 COPY src ./src
+# scripts/ holds build-time helpers (e.g. copying the vendored Qoder WASM)
+COPY scripts ./scripts
 RUN npm run build
 # prune to production deps for the runtime image
 RUN npm prune --omit=dev
