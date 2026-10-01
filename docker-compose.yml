@@ -14,7 +14,7 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./data:/data
+      - gateway-data:/data
     environment:
       # Do NOT put real secrets in this file; use an .env file next to it
       # (compose reads it automatically) or docker secrets.
@@ -34,3 +34,9 @@ services:
       retries: 3
     stop_grace_period: 30s
     restart: unless-stopped
+
+volumes:
+  # Named volume (not a bind mount): Docker initialises it from the image's
+  # /data, which the Dockerfile chowns to the non-root `gateway` user. A bind
+  # mount would override that ownership and the process could not write the db.
+  gateway-data:
