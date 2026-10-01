@@ -30,6 +30,27 @@ export interface StoredAccount {
 
 export type StoreResult = { ok: true } | { ok: false; error: string }
 
+/**
+ * A gateway API key as persisted. `keyHash` is the SHA-256 of the full key;
+ * the plaintext key is never stored and never leaves the service layer.
+ */
+export interface ApiKeyRecord {
+  id: string
+  name: string
+  /** Short, non-secret discriminator (first 8 chars of the key body). */
+  keyPrefix: string
+  /** SHA-256(full key), lowercase hex. */
+  keyHash: string
+  enabled: boolean
+  createdAt: number
+  lastUsedAt: number | null
+  expiresAt: number | null
+  revokedAt: number | null
+}
+
+/** Fields accepted when creating an API key. */
+export type ApiKeyInput = Omit<ApiKeyRecord, 'lastUsedAt' | 'revokedAt'>
+
 export interface Job {
   id: string
   provider: string | null
@@ -87,4 +108,14 @@ export interface StoreGateway {
   /** Global settings (gateway api key hash, timezone, etc). */
   getSetting(key: string): unknown
   setSetting(key: string, value: unknown): void
+
+  /** Issued gateway API keys (hash-only storage). */
+  createApiKey(record: ApiKeyRecord): StoreResult
+  listApiKeys(): ApiKeyRecord[]
+  /** Locate one candidate row by its non-secret prefix. */
+  getApiKeyByPrefix(prefix: string): ApiKeyRecord | undefined
+  /** Record that a key was used now (audit; no key material involved). */
+  touchApiKey(id: string, at: number): void
+  /** Soft-delete: stamps revoked_at and disables the key. */
+  revokeApiKey(id: string, at: number): StoreResult
 }

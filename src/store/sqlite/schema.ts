@@ -117,4 +117,26 @@ export const MIGRATIONS: Migration[] = [
       )`,
     ],
   },
+  {
+    // Gateway API keys issued through POST /api/keys.
+    // Only a SHA-256 hash is stored — never the key itself. `key_prefix` is a
+    // short, non-secret discriminator used to locate a candidate row before the
+    // constant-time hash comparison.
+    version: 2,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS api_keys (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        key_prefix TEXT NOT NULL,
+        key_hash TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        last_used_at INTEGER,
+        expires_at INTEGER,
+        revoked_at INTEGER
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS ix_api_keys_hash ON api_keys(key_hash)`,
+      `CREATE INDEX IF NOT EXISTS ix_api_keys_prefix ON api_keys(key_prefix)`,
+    ],
+  },
 ]

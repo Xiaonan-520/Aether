@@ -19,6 +19,7 @@ import type {
   StoredAccount,
   StoreGateway,
   StoreResult,
+  ApiKeyRecord,
 } from './types.js'
 
 /** Local-timezone day key, e.g. `2026-10-01` (matches SQLite date() output). */
@@ -43,6 +44,7 @@ export class MemoryStore implements StoreGateway {
   private readonly jobs = new Map<string, Job>()
   private readonly events: Record<string, unknown>[] = []
   private readonly settings = new Map<string, unknown>()
+  private readonly apiKeys = new Map<string, ApiKeyRecord>()
 
   listAccounts(provider?: string): StoredAccount[] {
     return [...this.accounts.values()]
@@ -181,5 +183,44 @@ export class MemoryStore implements StoreGateway {
 
   setSetting(key: string, value: unknown): void {
     this.settings.set(key, value)
+  }
+
+  // -- issued gateway API keys ------------------------------------------------
+  createApiKey(record: ApiKeyRecord): StoreResult {
+    if (this.apiKeys.has(record.id)) {
+      return { ok: false, error: `api key "${record.id}" already exists` }
+    }
+    for (const existing of this.apiKeys.values()) {
+      if (existing.keyHash === record.keyHash) {
+        return { ok: false, error: 'api key hash collision' }
+      }
+    }
+    this.apiKeys.set(record.id, { ...record })
+    return { ok: true }
+  }
+
+  listApiKeys(): ApiKeyRecord[] {
+    return [...this.apiKeys.values()]
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .map((k) => ({ ...k }))
+  }
+
+  getApiKeyByPrefix(prefix: string): ApiKeyRecord | undefined {
+    for (const record of this.apiKeys.values()) {
+      if (record.keyPrefix === prefix) return { ...record }
+    }
+    return undefined
+  }
+
+  touchApiKey(id: string, at: number): void {
+    const record = this.apiKeys.get(id)
+    if (record) this.apiKeys.set(id, { ...record, lastUsedAt: at })
+  }
+
+  revokeApiKey(id: string, at: number): StoreResult {
+    const record = this.apiKeys.get(id)
+    if (!record) return { ok: false, error: `api key "${id}" not found` }
+    this.apiKeys.set(id, { ...record, enabled: false, revokedAt: at })
+    return { ok: true }
   }
 }

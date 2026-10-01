@@ -11,6 +11,7 @@ import { ChatService } from '../service/chat-service.js'
 import { ModelService } from '../service/model-service.js'
 import { AdminService } from '../service/admin-service.js'
 import { LoginService } from '../service/login-service.js'
+import { ApiKeyService } from '../service/api-key-service.js'
 import { parseChatCompletionsRequest, OpenAIApiError } from '../protocol/openai/parse.js'
 import {
   serializeChatCompletion,
@@ -26,6 +27,7 @@ export interface GatewayApp {
   models: ModelService
   admin: AdminService
   login: LoginService
+  apiKeys: ApiKeyService
   listen: (port: number, host: string) => Promise<unknown>
 }
 
@@ -47,6 +49,7 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
   const models = new ModelService(ctx)
   const admin = new AdminService(ctx)
   const login = new LoginService(ctx)
+  const apiKeys = new ApiKeyService(ctx)
 
   const app = new Hono()
 
@@ -54,9 +57,14 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
   app.get('/healthz', (c) => c.json({ ok: true, ts: ctx.now() }))
 
   // -- auth middleware ------------------------------------------------------
+  // /v1/* accepts the bootstrap GATEWAY_API_KEY (unchanged, checked first) and
+  // any issued API key created through POST /api/keys.
   app.use('/v1/*', async (c, next) => {
     const token = bearerToken(c.req.header('Authorization'))
-    if (!token || !tokenEquals(token, ctx.config.gatewayApiKey)) {
+    const ok =
+      token !== null &&
+      (tokenEquals(token, ctx.config.gatewayApiKey) || apiKeys.verify(token))
+    if (!ok) {
       return c.json(
         { error: { message: 'invalid API key', type: 'authentication_error', code: 'invalid_api_key' } },
         401,
@@ -223,6 +231,17 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
     return c.json({ events: admin.listEvents(limit) })
   })
 
+  // -- issued gateway API keys (admin token; inherits the /api/* middleware) --
+  // The full key is returned by POST only; GET never exposes key or hash.
+  app.post('/api/keys', async (c) => {
+    const body = await c.req
+      .json<Record<string, unknown>>()
+      .catch(() => ({} as Record<string, unknown>))
+    return c.json(apiKeys.create({ name: body.name, expiresAt: body.expiresAt }), 201)
+  })
+  app.get('/api/keys', (c) => c.json({ keys: apiKeys.list() }))
+  app.delete('/api/keys/:id', (c) => c.json(apiKeys.remove(c.req.param('id'))))
+
   // -- error handling -------------------------------------------------------
   app.onError((err, c) => {
     if (err instanceof OpenAIApiError) {
@@ -259,5 +278,5 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
     })
   }
 
-  return { app, chat, models, admin, login, listen }
+  return { app, chat, models, admin, login, apiKeys, listen }
 }

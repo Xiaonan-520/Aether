@@ -20,6 +20,7 @@ import type {
   StoredAccount,
   StoreGateway,
   StoreResult,
+  ApiKeyRecord,
 } from '../types.js'
 import { MIGRATIONS } from './schema.js'
 
@@ -167,6 +168,32 @@ function rowToQuota(r: QuotaRow): QuotaSnapshot {
     resetAt: r.reset_at,
     lastUpdatedAt: r.last_updated_at,
     rawJson: r.raw_json,
+  }
+}
+
+interface ApiKeyRow {
+  id: string
+  name: string
+  key_prefix: string
+  key_hash: string
+  enabled: number
+  created_at: number
+  last_used_at: number | null
+  expires_at: number | null
+  revoked_at: number | null
+}
+
+function rowToApiKey(r: ApiKeyRow): ApiKeyRecord {
+  return {
+    id: r.id,
+    name: r.name,
+    keyPrefix: r.key_prefix,
+    keyHash: r.key_hash,
+    enabled: r.enabled !== 0,
+    createdAt: r.created_at,
+    lastUsedAt: r.last_used_at,
+    expiresAt: r.expires_at,
+    revokedAt: r.revoked_at,
   }
 }
 
@@ -630,6 +657,56 @@ export class SqliteStore implements StoreGateway {
          ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json`,
       )
       .run(key, JSON.stringify(value))
+  }
+
+  // -- issued gateway API keys ------------------------------------------------
+  createApiKey(record: ApiKeyRecord): StoreResult {
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO api_keys (id, name, key_prefix, key_hash, enabled, created_at, last_used_at, expires_at, revoked_at)
+           VALUES (@id, @name, @keyPrefix, @keyHash, @enabled, @createdAt, @lastUsedAt, @expiresAt, @revokedAt)`,
+        )
+        .run({
+          id: record.id,
+          name: record.name,
+          keyPrefix: record.keyPrefix,
+          keyHash: record.keyHash,
+          enabled: record.enabled ? 1 : 0,
+          createdAt: record.createdAt,
+          lastUsedAt: record.lastUsedAt,
+          expiresAt: record.expiresAt,
+          revokedAt: record.revokedAt,
+        })
+      return { ok: true }
+    } catch (err) {
+      // UNIQUE(id) or UNIQUE(key_hash)
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  }
+
+  listApiKeys(): ApiKeyRecord[] {
+    return (this.db
+      .prepare('SELECT * FROM api_keys ORDER BY created_at DESC')
+      .all() as unknown as ApiKeyRow[]).map(rowToApiKey)
+  }
+
+  getApiKeyByPrefix(prefix: string): ApiKeyRecord | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM api_keys WHERE key_prefix = ? LIMIT 1')
+      .get(prefix) as ApiKeyRow | undefined
+    return row ? rowToApiKey(row) : undefined
+  }
+
+  touchApiKey(id: string, at: number): void {
+    this.db.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?').run(at, id)
+  }
+
+  revokeApiKey(id: string, at: number): StoreResult {
+    const info = this.db
+      .prepare('UPDATE api_keys SET enabled = 0, revoked_at = ? WHERE id = ?')
+      .run(at, id)
+    return info.changes > 0 ? { ok: true } : { ok: false, error: `api key "${id}" not found` }
   }
 
   close(): void {
