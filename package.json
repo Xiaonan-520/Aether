@@ -5,7 +5,7 @@
   "type": "module",
   "main": "dist/http/index.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx watch src/http/index.ts",
     "start": "node dist/http/index.js",
