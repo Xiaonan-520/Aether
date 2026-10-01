@@ -4,4 +4,7 @@ data/
 *.db
 *.db-*
 *.log
+# Secrets — keep the template tracked, ignore every real env file.
 .env
+.env.*
+!.env.example

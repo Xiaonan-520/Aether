@@ -88,24 +88,24 @@ Provider-specific 实现禁止污染 Gateway Core。
 
 ## 4. Current Implementation Status
 
-> 以当前源码实际为准（仅 7 个 ts 文件、共约 602 行）。
+> 更新于 Phase 3A 完成节点（2026-10-01）。TypeScript 源码约 3500 行 + 测试约 2200 行，102 个单测/集成测试全绿。
 
 | 组件 | 状态 | 说明 |
 |---|---|---|
-| HTTP framework | NOT STARTED | Hono + @hono/node-server 已入依赖，未写 server/路由 |
-| Hono 薄层 | NOT STARTED | 无 http/ |
-| OpenAI API | NOT STARTED | 无 /v1/models、/v1/chat/completions |
-| Account Manager | PARTIAL | 仅领域类型 core/types.ts:Account/AccountStatus/AccountPatch；无实现 |
-| Account Pool | PARTIAL | 仅 ModelRouter 雏形；选号/冷却/失败转移逻辑未实现 |
-| Provider Registry | PARTIAL | provider.ts 抽象 + provider-registry.ts 已写；0 个真实 provider |
-| Model Registry | PARTIAL | core/types.ts:ModelEntry + model-router.ts 已写；无 models 表/种子 |
-| SQLite | NOT STARTED | better-sqlite3 在 optionalDependencies（本机省略安装）；无 SQLiteStore |
-| Scheduler | NOT STARTED | 无 jobs 实现（StoreGateway 已含 createJob/listJobs/nextDueJobs 接口） |
-| Token Manager | NOT STARTED | crypto.ts（at-rest 加密）已写；无 token 生命周期逻辑 |
-| Quota | NOT STARTED | QuotaSnapshot / getQuota/setQuota 接口已定义；无 provider 实现 |
-| Credit Claim | NOT STARTED | ClaimOutcome 类型 + recordClaim/isClaimedToday 接口已定义；无实现 |
-| Docker | NOT STARTED | 无 Dockerfile / compose |
-| Tests | NOT STARTED | tests/ 为空；vitest 已配置但无测试用例 |
+| HTTP framework | DONE | `src/http/app.ts`：Hono app 工厂 + `@hono/node-server`；`src/http/index.ts` bootstrap（SIGTERM drain） |
+| Hono 薄层 | DONE | /healthz、鉴权中间件（GATEWAY_API_KEY / GATEWAY_ADMIN_TOKEN 常量时间比较）、全局错误处理 |
+| OpenAI API | DONE | `GET /v1/models`、`POST /v1/chat/completions`（stream + 非 stream）；SSE `data:` 帧 + `[DONE]`；错误统一 OpenAI error shape |
+| Account Manager | DONE | AdminService（`src/service/admin-service.ts`）：accounts CRUD、credential 导入（加密落库）、手动触发 |
+| Account Pool | DONE | `src/core/pool/account-pool.ts`：选号（enabled/status/限流窗口/LRU/优先级/exclude）、过期内联 refresh（单飞）、reportResult 状态机（AUTH/RATE/QUOTA/TERMINAL/NEEDS_*） |
+| Provider Registry | DONE | registry 完备；**0 个真实 provider（Phase 3B 接入）**；`tests/fixtures/mock-provider.ts` 提供 Scriptable mock |
+| Model Registry | DONE | models 表 + ModelRouter（`provider::model` 显式路由 + 优先级回退）；/v1/models 标注 available |
+| SQLite | DONE | `src/store/sqlite/`（WAL、顺序迁移、schema_version 表）+ `scripts/migrate.ts`；better-sqlite3 v12（Node 26 需 v12+）；缺失时自动降级 MemoryStore |
+| Scheduler | DONE | `src/core/worker/scheduler.ts`：job 表驱动、token_refresh/quota_sync/credit_claim/health_check 扫描、指数退避（1m→30m cap）、终态错误→needs_manual_action、并发上限、graceful stop |
+| Token Manager | DONE | CredentialCipher（AES-256-GCM at-rest）+ chat 内联 refresh（AUTH 错误→refresh→同号重试一次） |
+| Quota | PARTIAL | 存储与选号信号已接（quota_exhausted 状态、modelRateLimits）；provider 真实 quota 拉取待 3B |
+| Credit Claim | PARTIAL | ClaimOutcome 归一 + jobs 幂等框架已接；provider 真实 claim 待 3B（ZCode captcha→needs_manual_action，不自动） |
+| Docker | DONE* | Dockerfile（multi-stage、non-root、healthcheck）+ docker-compose.yml + .dockerignore；本机无 docker daemon，实际 build/run 需在 docker 环境验证 |
+| Tests | DONE | 102 个测试（vitest）：store 双后端对拍、pool 状态机、协议 golden、scheduler、service failover、HTTP 集成（app.request） |
 
 ---
 
@@ -210,14 +210,15 @@ Provider-specific 实现禁止污染 Gateway Core。
 
 ## 10. Known Problems
 
-- `src/store/memory-store.ts` **尚未实现**（StoreGateway 的内存实现缺失）。
-- Provider Adapter：一个都没有（codearts/buddy/workbuddy/zcode 未开始）。
-- HTTP / Service / protocol 层未开始。
-- Scheduler、Account Pool 逻辑未实现。
-- SQLite 实现未开始；better-sqlite3 为 optional，本机未安装（Docker 阶段再编）。
-- 无 Dockerfile / docker-compose / GitHub Actions。
-- 无 `src/config/`（配置加载）。
-- `package.json` 的 `start`/`main` 指向 `dist/http/index.js`，该文件尚不存在。
+> 更新于 Phase 3A 完成节点：
+
+- Provider Adapter：一个都没有（codearts/buddy/workbuddy/zcode 未开始）—— Phase 3B 的全部内容。
+- Docker 镜像未实际构建验证（本机无 docker daemon）；Dockerfile/compose 已就绪，需在 docker 环境跑一次 `docker compose up` 验证。
+- Scheduler 的 token_refresh/quota_sync/credit_claim 执行器为框架（无真实 provider 可调）；3B 注册 provider 时接入真实 executor。
+- tool calls / vision 字段在协议层透传，但未端到端验证（待 3B 与真实 provider 一起）。
+- GitHub Actions CI 未配置。
+
+已解决（原清单）：memory-store、SQLite、config、HTTP/Service/protocol、Scheduler、Account Pool、Dockerfile/compose、`dist/http/index.js` 入口 —— 均已实现并有测试覆盖。
 
 ---
 

@@ -1,0 +1,36 @@
+# Runs the image published to GHCR by .github/workflows/docker.yml.
+# Deploy = pull the image, then bring the stack up:
+#
+#   cp .env.example .env      # fill in the three secrets
+#   docker compose pull
+#   docker compose up -d
+#
+# Pin GATEWAY_IMAGE_TAG to a commit SHA tag from a known-good build for
+# reproducible deploys (see the package's tags on GHCR).
+services:
+  gateway:
+    image: ghcr.io/xiaonan-520/multi-provider-ai-gateway:${GATEWAY_IMAGE_TAG:-latest}
+    container_name: ai-gateway
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      # Do NOT put real secrets in this file; use an .env file next to it
+      # (compose reads it automatically) or docker secrets.
+      DATA_DIR: /data
+      GATEWAY_API_KEY: ${GATEWAY_API_KEY:?set GATEWAY_API_KEY in .env}
+      GATEWAY_SECRET: ${GATEWAY_SECRET:?set GATEWAY_SECRET in .env}
+      GATEWAY_ADMIN_TOKEN: ${GATEWAY_ADMIN_TOKEN:?set GATEWAY_ADMIN_TOKEN in .env}
+      TZ: ${TZ:-Asia/Shanghai}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      HTTP_HOST: 0.0.0.0
+      HTTP_PORT: "8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    stop_grace_period: 30s
+    restart: unless-stopped
