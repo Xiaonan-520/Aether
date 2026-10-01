@@ -104,10 +104,18 @@ describe('buddy login flow', () => {
 })
 
 describe('buddy chat', () => {
-  it('forwards an OpenAI request and returns a canonical result', async () => {
-    const fetcher = fetcherFor([
-      { match: '/v2/chat/completions', json: { choices: [{ message: { role: 'assistant', content: 'hi there' }, finish_reason: 'stop' }], usage: { prompt_tokens: 5, completion_tokens: 3 } } },
-    ])
+  it('forwards an OpenAI request and aggregates the SSE for a non-stream client', async () => {
+    const sse = [
+      'data: {"choices":[{"delta":{"content":"hi "}}]}',
+      '',
+      'data: {"choices":[{"delta":{"content":"there"}}]}',
+      '',
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":3}}',
+      '',
+      'data: [DONE]',
+      '',
+    ].join('\n')
+    const fetcher = fetcherFor([{ match: '/v2/chat/completions', text: sse }])
     const provider = createWorkBuddyProvider(fetcher)
     const result = await provider.chat.chat(ctxFor('workbuddy'), { model: 'glm-5.3', messages: [{ role: 'user', content: 'hi' }], stream: false }, account())
     expect(result.content).toBe('hi there')
@@ -121,7 +129,7 @@ describe('buddy chat', () => {
     expect(headers.Authorization).toBe('Bearer access-1')
     expect(headers['X-Product-Code']).toBe('workbuddy')
     expect(headers['X-Product']).toBe('WorkBuddy')
-    expect(JSON.parse(String(init.body))).toMatchObject({ model: 'glm-5.3', stream: false })
+    expect(JSON.parse(String(init.body))).toMatchObject({ model: 'glm-5.3' })
   })
 
   it('streams upstream OpenAI deltas as canonical chunks', async () => {
@@ -190,5 +198,87 @@ describe('buddy models and quota', () => {
     const quota = await provider.ops.getQuota!(ctxFor('workbuddy'), account())
     expect(quota.known).toBe(false)
     expect(quota.remaining).toBeNull()
+  })
+})
+
+describe('buddy upstream compatibility contract', () => {
+  const SSE_OK = 'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+
+  function lastBody(fetcher: ReturnType<typeof fetcherFor>): Record<string, unknown> {
+    const calls = (fetcher as unknown as { mock: { calls: Array<[string, RequestInit]> } }).mock.calls
+    return JSON.parse(String(calls.at(-1)![1].body)) as Record<string, unknown>
+  }
+
+  it('stream:true + existing system — keeps the client system prompt, upstream stream=true', async () => {
+    const fetcher = fetcherFor([{ match: '/v2/chat/completions', text: SSE_OK }])
+    const provider = createWorkBuddyProvider(fetcher)
+    const messages = [
+      { role: 'system' as const, content: 'BE TERSE' },
+      { role: 'user' as const, content: 'hi' },
+    ]
+    const chunks = []
+    for await (const c of provider.chat.stream(ctxFor('workbuddy'), { model: 'glm-5.3', messages, stream: true }, account())) chunks.push(c)
+    expect(chunks.map((c) => c.text).join('')).toBe('ok')
+    const body = lastBody(fetcher)
+    expect(body.stream).toBe(true)
+    expect((body.messages as Array<{ role: string; content: string }>)[0]).toEqual({ role: 'system', content: 'BE TERSE' })
+    expect((body.messages as unknown[]).length).toBe(2)
+  })
+
+  it('stream:true + no system — injects the default system prompt', async () => {
+    const fetcher = fetcherFor([{ match: '/v2/chat/completions', text: SSE_OK }])
+    const provider = createWorkBuddyProvider(fetcher)
+    const chunks = []
+    for await (const c of provider.chat.stream(ctxFor('workbuddy'), { model: 'glm-5.3', messages: [{ role: 'user', content: 'hi' }], stream: true }, account())) chunks.push(c)
+    expect(chunks.map((c) => c.text).join('')).toBe('ok')
+    const body = lastBody(fetcher)
+    expect(body.stream).toBe(true)
+    const messages = body.messages as Array<{ role: string; content: string }>
+    expect(messages[0].role).toBe('system')
+    expect(messages[0].content).toBe('You are a helpful assistant.')
+    expect(messages[1]).toEqual({ role: 'user', content: 'hi' })
+  })
+
+  it('stream:false + existing system — upstream still gets stream=true, client gets a ChatResult', async () => {
+    const fetcher = fetcherFor([{ match: '/v2/chat/completions', text: SSE_OK }])
+    const provider = createWorkBuddyProvider(fetcher)
+    const result = await provider.chat.chat(ctxFor('workbuddy'), {
+      model: 'glm-5.3', stream: false,
+      messages: [{ role: 'system', content: 'S' }, { role: 'user', content: 'hi' }],
+    }, account())
+    expect(result).toEqual({ content: 'ok', finishReason: 'stop' })
+    const body = lastBody(fetcher)
+    expect(body.stream).toBe(true)
+    expect((body.messages as Array<{ role: string }>)[0].role).toBe('system')
+  })
+
+  it('stream:false + no system — injects system, upstream stream=true, returns a ChatResult', async () => {
+    const fetcher = fetcherFor([{ match: '/v2/chat/completions', text: SSE_OK }])
+    const provider = createWorkBuddyProvider(fetcher)
+    const result = await provider.chat.chat(ctxFor('workbuddy'), {
+      model: 'glm-5.3', stream: false, messages: [{ role: 'user', content: 'hi' }],
+    }, account())
+    expect(result.content).toBe('ok')
+    const body = lastBody(fetcher)
+    expect(body.stream).toBe(true)
+    expect((body.messages as Array<{ role: string; content: string }>)[0].content).toBe('You are a helpful assistant.')
+  })
+
+  it('aggregates reasoning and usage on the non-streaming path', async () => {
+    const sse = [
+      'data: {"choices":[{"delta":{"reasoning_content":"think"}}]}',
+      '',
+      'data: {"choices":[{"delta":{"content":"answer"}}]}',
+      '',
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":4}}',
+      '',
+      'data: [DONE]',
+      '',
+    ].join('\n')
+    const provider = createWorkBuddyProvider(fetcherFor([{ match: '/v2/chat/completions', text: sse }]))
+    const result = await provider.chat.chat(ctxFor('workbuddy'), { model: 'glm-5.3', stream: false, messages: [{ role: 'user', content: 'x' }] }, account())
+    expect(result.reasoning).toBe('think')
+    expect(result.content).toBe('answer')
+    expect(result.usage).toEqual({ promptTokens: 7, completionTokens: 4 })
   })
 })

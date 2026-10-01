@@ -83,9 +83,26 @@ export function createBuddyProvider(product: BuddyProduct, fetcher: Fetcher = fe
     return sep > 0 ? model.slice(sep + 2) : model
   }
 
-  /** Canonical ChatRequest → upstream OpenAI chat body. */
+  /** Buddy upstream rejects requests whose first message is not a system prompt
+   * (`code 11128`). Prepend a default only when the client sent none. */
+  const DEFAULT_SYSTEM_PROMPT = 'You are a helpful assistant.'
+
+  function withLeadingSystem(
+    messages: ChatRequest['messages'],
+  ): ChatRequest['messages'] {
+    if (messages.length > 0 && messages[0].role === 'system') return messages
+    return [{ role: 'system', content: DEFAULT_SYSTEM_PROMPT }, ...messages]
+  }
+
+  /**
+   * Canonical ChatRequest → upstream OpenAI chat body.
+   *
+   * `stream` is always true: the Buddy upstream answers `code 11101`
+   * ("Non-stream chat request is currently not supported") otherwise, so a
+   * non-streaming client is served by aggregating the SSE stream here.
+   */
   function toUpstreamBody(req: ChatRequest, upstreamModel: string): Record<string, unknown> {
-    const messages = req.messages.map((m: ChatRequest['messages'][number]) => {
+    const messages = withLeadingSystem(req.messages).map((m: ChatRequest['messages'][number]) => {
       const base: Record<string, unknown> = { role: m.role, content: m.content }
       if (m.toolCalls) {
         base.tool_calls = m.toolCalls.map((tc: NonNullable<ChatRequest['messages'][number]['toolCalls']>[number]) => ({
@@ -98,7 +115,7 @@ export function createBuddyProvider(product: BuddyProduct, fetcher: Fetcher = fe
       if (m.name) base.name = m.name
       return base
     })
-    const body: Record<string, unknown> = { model: upstreamModel, messages, stream: req.stream }
+    const body: Record<string, unknown> = { model: upstreamModel, messages, stream: true }
     if (req.maxTokens !== undefined) body.max_tokens = req.maxTokens
     if (req.temperature !== undefined) body.temperature = req.temperature
     if (req.tools && req.tools.length > 0) {
@@ -232,6 +249,31 @@ export function createBuddyProvider(product: BuddyProduct, fetcher: Fetcher = fe
     yield { text: '', finishReason: finishReason ?? 'stop' }
   }
 
+  /**
+   * Consume the upstream SSE stream and fold it into a single ChatResult
+   * (used for clients that asked for `stream: false`).
+   *
+   * Note: the canonical ChatResult has no tool-call field, so streamed
+   * tool_calls cannot be represented on the non-streaming path; text,
+   * reasoning and usage are aggregated.
+   */
+  async function aggregate(response: Response): Promise<ChatResult> {
+    let content = ''
+    let reasoning = ''
+    let finishReason = 'stop'
+    let usage: ChatResult['usage']
+    for await (const chunk of streamChat(response)) {
+      content += chunk.text
+      if (chunk.reasoning) reasoning += chunk.reasoning
+      if (chunk.usage) usage = chunk.usage
+      if (chunk.finishReason) finishReason = chunk.finishReason
+    }
+    const result: ChatResult = { content, finishReason }
+    if (reasoning !== '') result.reasoning = reasoning
+    if (usage) result.usage = usage
+    return result
+  }
+
   return {
     id: product.id,
     displayName: product.displayName,
@@ -312,18 +354,10 @@ export function createBuddyProvider(product: BuddyProduct, fetcher: Fetcher = fe
       async chat(ctx: ProviderCtx, req: ChatRequest, account: Account, _tools?: Tool[]): Promise<ChatResult> {
         const credential = await credentialOf(ctx, account)
         if (!credential) throw new UpstreamError({ kind: 'AUTH_INVALID', message: 'buddy: no credential' })
-        const response = await postChat(credential, { ...req, stream: false }, bareModel(req.model))
-        const json = (await response.json()) as Record<string, unknown>
-        const choices = json.choices as Array<Record<string, unknown>> | undefined
-        const choice = choices?.[0]
-        const message = (choice?.message ?? {}) as Record<string, unknown>
-        const usage = json.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined
-        return {
-          content: typeof message.content === 'string' ? message.content : '',
-          reasoning: typeof message.reasoning_content === 'string' ? message.reasoning_content : undefined,
-          finishReason: typeof choice?.finish_reason === 'string' ? choice.finish_reason : 'stop',
-          usage: usage ? { promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens } : undefined,
-        }
+        // The upstream only speaks SSE, so a non-streaming client is served by
+        // consuming the stream and aggregating it into a ChatResult.
+        const response = await postChat(credential, req, bareModel(req.model))
+        return aggregate(response)
       },
       stream(ctx: ProviderCtx, req: ChatRequest, account: Account, _tools?: Tool[]): AsyncIterable<ChatChunk> {
         const model = bareModel(req.model)
