@@ -87,6 +87,14 @@ export function renderAuthorizePage(config: {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ZCode captcha authorization</title>
+<script>
+  // Required by AliyunCaptcha.js: region/prefix are read ONLY from this global,
+  // never from initAliyunCaptcha params. Must be defined before the SDK loads.
+  window.AliyunCaptchaConfig = {
+    region: '${safe.region}',
+    prefix: '${safe.prefix}'
+  };
+</script>
 <script src="${safe.scriptUrl}"></script>
 <style>
   body { font-family: system-ui, sans-serif; max-width: 640px; margin: 3rem auto; padding: 0 1rem; color: #1a1a1a; }
@@ -102,10 +110,10 @@ export function renderAuthorizePage(config: {
 <body>
 <h1>ZCode captcha authorization</h1>
 <p>Complete the verification below. It is the official Aliyun widget in your
-real browser — nothing is automated. On success the token is submitted to the
+real browser &mdash; nothing is automated. On success the token is submitted to the
 gateway and used for subsequent ZCode requests.</p>
 <div id="captcha-element"></div>
-<label>Gateway admin token (required to submit — it is sent only to this gateway)
+<label>Gateway admin token (required to submit &mdash; it is sent only to this gateway)
   <input id="token" type="password" autocomplete="off" placeholder="GATEWAY_ADMIN_TOKEN">
 </label>
 <button id="btn">Start verification</button>
@@ -119,46 +127,69 @@ gateway and used for subsequent ZCode requests.</p>
     status.className = kind;
     status.textContent = message;
   }
+  function submitToken(captchaVerifyParam) {
+    var token = tokenInput.value.trim();
+    if (!token) {
+      log('err', 'Enter the gateway admin token first.');
+      return Promise.resolve(false);
+    }
+    return fetch('${safe.submitPath}', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'authorization': 'Bearer ' + token },
+      body: JSON.stringify({ verify_param: captchaVerifyParam })
+    }).then(function (res) {
+      return res.json().then(function (out) { return { status: res.status, out: out }; });
+    }).then(function (r) {
+      if (r.out && r.out.ok) {
+        log('ok', 'Token accepted (expires in ~' + r.out.expires_in + 's). You can close this page.');
+        return true;
+      }
+      if (r.status === 401) {
+        log('err', 'Admin token missing or invalid — paste a valid token and retry.');
+      } else {
+        log('err', 'Gateway rejected the token: ' + JSON.stringify(r.out));
+      }
+      return false;
+    }).catch(function (err) {
+      log('err', 'Submission failed: ' + err);
+      return false;
+    });
+  }
   document.getElementById('btn').addEventListener('click', function () {
     if (typeof initAliyunCaptcha !== 'function') {
-      log('err', 'widget script failed to load — check network access to ' + '${safe.scriptUrl}');
-      return;
+      log('err', 'Widget script failed to load — check network access to ' + '${safe.scriptUrl}');
     }
+  });
+  // Popup mode: the SDK binds #btn itself and opens the widget on click.
+  // initAliyunCaptcha must be called exactly once, at page load.
+  if (typeof initAliyunCaptcha === 'function') {
     initAliyunCaptcha({
       SceneId: '${safe.sceneId}',
-      prefix: '${safe.prefix}',
-      region: '${safe.region}',
-      mode: 'embed',
+      mode: 'popup',
       element: '#captcha-element',
-      captchaVerifyCallback: function (captchaVerifyParam) {
-        var token = tokenInput.value.trim();
-        if (!token) {
-          log('err', 'Enter the gateway admin token first.');
-          return Promise.resolve({ captchaResult: false });
+      button: '#btn',
+      language: 'cn',
+      getInstance: function (instance) { window.__captchaInstance = instance; },
+      success: function (result) {
+        var param = result && typeof result === 'object'
+          ? (result.captchaVerifyParam || result.verifyParam || result.data || result.param || result)
+          : result;
+        if (param && typeof param === 'object') {
+          log('err', 'Widget returned an unusable result: ' + JSON.stringify(param));
+          return;
         }
-        return fetch('${safe.submitPath}', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', 'authorization': 'Bearer ' + token },
-          body: JSON.stringify({ verify_param: captchaVerifyParam })
-        }).then(function (res) { return res.json().then(function (out) { return { status: res.status, out: out }; }); }).then(function (r) {
-          if (r.out && r.out.ok) {
-            log('ok', 'Token accepted (expires in ~' + r.out.expires_in + 's). You can close this page.');
-            return { captchaResult: true };
-          }
-          if (r.status === 401) {
-            log('err', 'Admin token missing or invalid — paste a valid token and retry.');
-          } else {
-            log('err', 'Gateway rejected the token: ' + JSON.stringify(r.out));
-          }
-          return { captchaResult: false };
-        }).catch(function (err) {
-          log('err', 'Submission failed: ' + err);
-          return { captchaResult: false };
-        });
+        submitToken(String(param));
       },
-      onBizError: function () { log('err', 'Widget error — retry.'); }
+      fail: function (result) {
+        log('err', 'Verification failed: ' + JSON.stringify(result || {}) + ' — click again to retry.');
+      },
+      onError: function (err) {
+        log('err', 'Widget error: ' + JSON.stringify(err || {}) + ' — click again to retry.');
+      }
     });
-  });
+  } else {
+    log('err', 'Widget script failed to load — check network access to ' + '${safe.scriptUrl}');
+  }
 </script>
 </body>
 </html>`
@@ -166,11 +197,9 @@ gateway and used for subsequent ZCode requests.</p>
 
 function escapeHtml(value: string): string {
   return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
 }
-
-export { CaptchaConfigCache, widgetParams }

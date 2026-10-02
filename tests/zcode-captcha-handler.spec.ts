@@ -162,11 +162,18 @@ describe('authorize page', () => {
       submitPath: '/api/accounts/zcode/captcha',
     })
     expect(html).toContain('initAliyunCaptcha')
-    expect(html).toContain("SceneId: '11xygtvd'")
-    expect(html).toContain("prefix: 'no8xfe'")
+    // V3 contract: region/prefix go through the pre-load global, never init params
+    expect(html).toContain('window.AliyunCaptchaConfig')
     expect(html).toContain("region: 'sgp'")
-    expect(html).toContain('captchaVerifyCallback')
-    expect(html).toContain("verify_param: captchaVerifyParam")
+    expect(html).toContain("prefix: 'no8xfe'")
+    expect(html).toContain("SceneId: '11xygtvd'")
+    expect(html).toContain("mode: 'popup'")
+    expect(html).toContain("button: '#btn'")
+    expect(html).toContain('getInstance')
+    expect(html).toContain('success:')
+    expect(html).toContain('verify_param')
+    expect(html).not.toContain('captchaVerifyCallback')
+    expect(html).not.toContain('onBizError')
     expect(html).toContain('/api/accounts/zcode/captcha')
   })
 
@@ -182,5 +189,18 @@ describe('authorize page', () => {
     expect(html).toContain('&#39;')
     expect(html).not.toContain("SceneId: '<script>'")
     expect(html).toContain('SceneId: \'&lt;script&gt;\'')
+  })
+
+  it('keeps the AliyunCaptchaConfig global before the SDK script tag', () => {
+    const html = renderAuthorizePage({
+      prefix: 'no8xfe',
+      region: 'sgp',
+      sceneId: '11xygtvd',
+      scriptUrl: 'https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js',
+      submitPath: '/y',
+    })
+    expect(html.indexOf('window.AliyunCaptchaConfig')).toBeLessThan(
+      html.indexOf('aliyunCaptcha/AliyunCaptcha.js'),
+    )
   })
 })
