@@ -8,11 +8,11 @@ WORKDIR /build
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
-COPY package.json package-lock.json .npmrc ./
+COPY package.json package-lock.json ./
 RUN npm ci --include=optional
 COPY tsconfig.json ./
 COPY src ./src
-# scripts/ holds build-time helpers (e.g. copying the vendored Qoder WASM)
+# scripts/ holds build-time helpers (asset copy; the Qoder WASM is optional)
 COPY scripts ./scripts
 RUN npm run build
 # prune to production deps for the runtime image
