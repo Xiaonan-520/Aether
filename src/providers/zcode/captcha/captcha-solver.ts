@@ -95,6 +95,8 @@ export function renderAuthorizePage(config: {
   button { margin-top: 1rem; padding: .5rem 1.25rem; font-size: 1rem; }
   pre { background: #f5f5f5; padding: .75rem; white-space: pre-wrap; word-break: break-all; }
   .ok { color: #0a7d32; } .err { color: #b00020; }
+  label { display: block; margin-top: 1rem; font-size: .9rem; }
+  input { width: 100%; padding: .4rem; margin-top: .25rem; box-sizing: border-box; }
 </style>
 </head>
 <body>
@@ -103,10 +105,16 @@ export function renderAuthorizePage(config: {
 real browser — nothing is automated. On success the token is submitted to the
 gateway and used for subsequent ZCode requests.</p>
 <div id="captcha-element"></div>
+<label>Gateway admin token (required to submit — it is sent only to this gateway)
+  <input id="token" type="password" autocomplete="off" placeholder="GATEWAY_ADMIN_TOKEN">
+</label>
 <button id="btn">Start verification</button>
 <pre id="status"></pre>
 <script>
   var status = document.getElementById('status');
+  var tokenInput = document.getElementById('token');
+  var preset = new URLSearchParams(location.search).get('token');
+  if (preset) tokenInput.value = preset;
   function log(kind, message) {
     status.className = kind;
     status.textContent = message;
@@ -123,16 +131,25 @@ gateway and used for subsequent ZCode requests.</p>
       mode: 'embed',
       element: '#captcha-element',
       captchaVerifyCallback: function (captchaVerifyParam) {
+        var token = tokenInput.value.trim();
+        if (!token) {
+          log('err', 'Enter the gateway admin token first.');
+          return Promise.resolve({ captchaResult: false });
+        }
         return fetch('${safe.submitPath}', {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
+          headers: { 'content-type': 'application/json', 'authorization': 'Bearer ' + token },
           body: JSON.stringify({ verify_param: captchaVerifyParam })
-        }).then(function (res) { return res.json(); }).then(function (out) {
-          if (out && out.ok) {
-            log('ok', 'Token accepted (expires in ~' + out.expires_in + 's). You can close this page.');
+        }).then(function (res) { return res.json().then(function (out) { return { status: res.status, out: out }; }); }).then(function (r) {
+          if (r.out && r.out.ok) {
+            log('ok', 'Token accepted (expires in ~' + r.out.expires_in + 's). You can close this page.');
             return { captchaResult: true };
           }
-          log('err', 'Gateway rejected the token: ' + JSON.stringify(out));
+          if (r.status === 401) {
+            log('err', 'Admin token missing or invalid — paste a valid token and retry.');
+          } else {
+            log('err', 'Gateway rejected the token: ' + JSON.stringify(r.out));
+          }
           return { captchaResult: false };
         }).catch(function (err) {
           log('err', 'Submission failed: ' + err);
