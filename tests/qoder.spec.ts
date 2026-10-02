@@ -1,12 +1,16 @@
 /**
  * Qoder contracts (international + CN).
  *
- * The encrypted-inference path is exercised against the **real vendored WASM**
- * (not a stub), because the whole point of that layer is producing a valid
- * `COSY` signature and encrypted body. Device identity is asserted to be
- * account-scoped and persisted.
+ * The encrypted-inference path is exercised against the **real WASM binary**
+ * (not a stub) when the operator has provided one, because the whole point of
+ * that layer is producing a valid `COSY` signature and encrypted body. The
+ * binary is not part of the repo; absent-binary behavior is asserted too.
+ * Device identity is asserted to be account-scoped and persisted.
  */
 import { createHash } from 'node:crypto'
+import { existsSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   QODER,
@@ -76,7 +80,10 @@ function makeFetcher(routes: Route[], onCall?: (url: string, init?: RequestInit)
 }
 
 describe('qoder wasm (real binary)', () => {
-  it('builds an encrypted request with the COSY auth header', async () => {
+  // The binary is not distributed with the repo; these run only when an
+  // operator (or dev checkout) has provided it.
+  const hasWasm = existsSync(resolve(dirname(fileURLToPath(import.meta.url)), '../src/providers/qoder/qoder-auth-wasm.wasm'))
+  it.skipIf(!hasWasm)('builds an encrypted request with the COSY auth header', async () => {
     const infer = await QoderEncryptedInfer.create({
       user: { uid: 'u1', securityOauthToken: 'tok' },
       machineId: CRED.machine_id,
@@ -92,7 +99,7 @@ describe('qoder wasm (real binary)', () => {
     expect(Object.keys(req.headers).length).toBeGreaterThan(5)
   })
 
-  it('produces a different signature for a different machine id (account isolation)', async () => {
+  it.skipIf(!hasWasm)('produces a different signature for a different machine id (account isolation)', async () => {
     const make = async (machineId: string) => {
       const infer = await QoderEncryptedInfer.create({
         user: { uid: 'u1', securityOauthToken: 'tok' },
@@ -106,6 +113,22 @@ describe('qoder wasm (real binary)', () => {
     const a = await make('11111111-1111-4111-8111-111111111111')
     const b = await make('22222222-2222-4222-8222-222222222222')
     expect(a).not.toBe(b)
+  })
+
+  it('fails with a clear NEEDS_MANUAL error when the WASM is absent', async () => {
+    // only meaningful when the binary is genuinely missing (fresh clone)
+    if (hasWasm) return
+    const { __testing } = await import('../src/providers/qoder/wasm.js')
+    __testing.resetGlue()
+    await expect(QoderEncryptedInfer.create({
+      user: { uid: 'u1', securityOauthToken: 'tok' },
+      machineId: CRED.machine_id,
+      metadata: { client_type: '5', business_product: 'cli', business_type: 'agent', scene: 'assistant' },
+      host: QODER.inferHost,
+    })).rejects.toMatchObject({
+      kind: 'NEEDS_MANUAL',
+      message: expect.stringContaining('not distributed'),
+    })
   })
 })
 

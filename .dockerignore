@@ -11,3 +11,5 @@ npm-debug.log*
 Dockerfile
 docker-compose.yml
 .dockerignore
+.playwright-cli
+__pycache__

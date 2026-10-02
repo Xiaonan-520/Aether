@@ -3,7 +3,13 @@
  *
  * Qoder's real inference path is **encrypted**: the request body and the
  * `Authorization: Bearer COSY.<payload>.<sig>` header are produced by the
- * official client's WASM (vendored in ./wasm.ts). Core never sees any of this.
+ * official client's WASM (see ./wasm.ts — the binary is not distributed
+ * with this repository and must be supplied by the operator).
+ *
+ * The WASM glue lives in ./wasm.ts; the binary itself is NOT distributed with
+ * this repository (licensing) and must be provided by the operator — without
+ * it chat requests fail with a clear NEEDS_MANUAL error while login, models
+ * and quota keep working. Core never sees any of this.
  *
  * Differences between the two products are pure config (hosts, client type), so
  * both providers share this adapter.

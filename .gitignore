@@ -8,3 +8,18 @@ data/
 .env
 .env.*
 !.env.example
+
+# Local tooling artifacts (never publish)
+.playwright-cli/
+__pycache__/
+
+# Internal handoff/audit notes (kept local, never published)
+/HANDOFF.md
+/docs/AUDIT_REPORT.md
+/docs/DESIGN_PHASE2.md
+
+# Proprietary binary — must never be committed (see src/providers/qoder/wasm.ts)
+src/providers/qoder/qoder-auth-wasm.wasm
+
+# Local registry preference (npmmirror) — do not force on contributors
+.npmrc

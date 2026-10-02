@@ -6,7 +6,13 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
+
+# Least privilege by default; build-and-push grants packages:write itself.
+permissions:
+  contents: read
 
 concurrency:
   group: docker-${{ github.ref }}
@@ -36,7 +42,22 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Build
+        run: npm run build
+
+      # PRs and forks never publish; also builds the image on PRs so a broken
+      # Dockerfile is caught before merge.
+      - name: Build image (no push on PR)
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   build-and-push:
+    if: github.event_name != 'pull_request'
     needs: verify
     runs-on: ubuntu-latest
     permissions:

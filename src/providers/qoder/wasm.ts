@@ -1,10 +1,10 @@
 /**
  * Qoder encrypted-inference WASM bridge.
  *
- * Vendored from the verified reference (jet-hub src/qoder-wasm.ts) together
- * with the official client's `qoder-auth-wasm.wasm` (298 KB). This is the
- * provider-specific layer: Core never knows Qoder exists, and the WASM is
- * kept byte-identical to the reference rather than re-derived.
+ * The glue (this module) is derived from the verified reference (jet-hub
+ * src/qoder-wasm.ts, MIT — see THIRD-PARTY-NOTICES.md); the official
+ * client's `qoder-auth-wasm.wasm` binary itself is NOT part of this
+ * repository and must be supplied by the operator (see qoderWasmPath).
  *
  * The bridge generates the `Authorization: Bearer COSY.<payload>.<sig>`
  * header and the encrypted body for `api2.qoder.sh`; those headers must be
@@ -26,8 +26,8 @@
  * 服务端认的是**模型目录里的 key**（`qfmodel` / `dmodel` / …），
  * 而公开端点只认一小撮通用名 —— 这就是「拿不到 Qwen3.8 系列」的根因。
  *
- * 本模块把客户端内嵌的 WASM（`src/qoder-auth-wasm.wasm`，298 KB，
- * 随插件分发）按 wasm-bindgen 约定接起来，用它**生成加密请求体**，
+ * 本模块把客户端内嵌的 WASM（`qoder-auth-wasm.wasm`，需操作者自行提供，
+ * 仓库不分发）按 wasm-bindgen 约定接起来，用它**生成加密请求体**，
  * 从而走客户端的同一条链路。
  *
  * ## ⚠️ 不是「破解密码学」
@@ -46,12 +46,30 @@
  *    混用会得到 `null pointer passed to rust`。
  * 3. **`requestresult_url(栈指针, ptr)` 参数顺序与直觉相反**（栈指针在前）。
  */
-import { readFileSync } from 'node:fs'
+import { UpstreamError } from '../../core/errors/upstream-error.js'
+import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 
 /** WASM 文件的绝对路径（位于 lib/，与编译产物的相对位置固定）。 */
-const WASM_PATH = resolve(dirname(fileURLToPath(import.meta.url)), 'qoder-auth-wasm.wasm')
+/**
+ * Location of the Qoder client WASM.
+ *
+ * The binary is NOT distributed with this repository: it is proprietary code
+ * extracted from Qoder's official client and carries no redistribution
+ * license. Operators who legally possess it (their own installed client) can
+ * point the gateway at it; everyone else gets a clear error instead of the
+ * gateway silently shipping someone else's binary.
+ */
+const WASM_FILENAME = 'qoder-auth-wasm.wasm'
+const DEFAULT_WASM_PATH = resolve(dirname(fileURLToPath(import.meta.url)), WASM_FILENAME)
+
+/** Resolve the WASM binary path (env override wins); null when absent. */
+export function qoderWasmPath(): string | null {
+  const override = process.env.QODER_WASM_PATH?.trim()
+  if (override) return existsSync(override) ? override : null
+  return existsSync(DEFAULT_WASM_PATH) ? DEFAULT_WASM_PATH : null
+}
 
 /**
  * 最小 `WebAssembly` 类型声明。
@@ -369,7 +387,18 @@ async function getGlue(): Promise<Glue> {
 
 /** 真正实例化 WASM 并接好 import。 */
 async function createGlue(): Promise<Glue> {
-  const bytes = readFileSync(WASM_PATH)
+  const wasmPath = qoderWasmPath()
+  if (!wasmPath) {
+    throw new UpstreamError({
+      kind: 'NEEDS_MANUAL',
+      message:
+        'qoder: encrypted inference needs the client WASM (qoder-auth-wasm.wasm), which is not ' +
+        'distributed with this project for licensing reasons. Provide your own copy next to the ' +
+        'qoder adapter or via QODER_WASM_PATH — it must come from a client you are legitimately ' +
+        'running. Until then the qoder/qoder-cn providers cannot serve chat requests.',
+    })
+  }
+  const bytes = readFileSync(wasmPath)
   const module = await WebAssembly.compile(bytes)
 
   let exports: Record<string, (...args: number[]) => number> = {}
@@ -709,5 +738,5 @@ export const __testing = {
   resetGlue(): void {
     gluePromise = null
   },
-  wasmPath: WASM_PATH,
+  wasmPath: qoderWasmPath,
 }

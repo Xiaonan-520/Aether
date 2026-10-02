@@ -1,158 +1,298 @@
 # Multi-Provider AI Gateway
 
-自托管、多 Provider、OpenAI-compatible 的 AI 账号网关。对外暴露单一 `http://<server>:8080/v1` 端点，内部统一处理多 Provider、多账号池、token 续期、quota 感知路由、failover 与调度任务。
+Self-hosted, multi-provider, OpenAI-compatible AI gateway. It exposes a single
+`/v1` endpoint to any OpenAI-compatible client and, behind it, manages a pool
+of provider accounts: routing, token refresh, quota awareness, failover and
+background maintenance jobs. Credentials are encrypted at rest and never
+appear in API responses or logs.
 
-```
-clients (RikkaHub / OpenCode / 任意 OpenAI client)
-  ↓  Authorization: Bearer <GATEWAY_API_KEY>
-OpenAI-compatible API (/v1)
-  ↓
-Gateway Core
-  ├── Model Registry / Router（provider::model 显式路由 + 优先级回退）
-  ├── Account Pool（状态机：active/cooldown/rate_limited/quota_exhausted/needs_manual_action…）
-  ├── Provider Registry / Adapters（provider 隔离，Core 无 provider-specific if/else）
-  ├── Token / Credential Manager（AES-256-GCM at-rest）
-  ├── Failover（401→refresh 一次重试；429→写限流窗口换号；quota 耗尽→停号；captcha→needs_manual_action）
-  ├── SQLite persistence（WAL，双后端：SQLite / MemoryStore）
-  └── Scheduler（token_refresh / quota_sync / credit_claim / health_check）
-```
+> **Development model:** Vibe Coding / AI-assisted development — see
+> [Development](#development) for what that means here.
 
-## 当前状态：14 个 Provider 已接入，Docker/GHCR 已部署并运行
-
-Gateway Core：
-- HTTP + OpenAI-compatible API（`/v1/models`、`/v1/chat/completions`，含 SSE 流式）✅
-- Account Pool 状态机 + failover ✅
-- SQLite + MemoryStore 双后端 ✅
-- Scheduler（token_refresh / quota_sync / credit_claim / health_check）✅
-- 错误归一化 ✅
-- Dockerfile / docker-compose（GHCR 拉取部署）✅
-- GitHub Actions → GHCR 镜像流水线（`.github/workflows/docker.yml`）✅
-- 测试：**353 passed / 29 files**；typecheck 与 build 均通过 ✅
-
-Provider Adapter（14 个，全部注册到 `/api/providers`）：
-
-```
-workbuddy        workbuddy-cn     codebuddy      buddy-intl
-zcode            lobsterai        cline          trae
-trae-intl        codearts         loomy          qoder
-qoder-cn         raccoon
+```text
+Client (any OpenAI-compatible tool)
+  │  Authorization: Bearer <GATEWAY_API_KEY>
+  ▼
+OpenAI-compatible API  /v1/chat/completions · /v1/models   (SSE streaming)
+  ▼
+Model Router            provider::model explicit routing + priority fallback
+  ▼
+Provider Adapter        one module per provider; core has no provider branches
+  ▼
+Account Pool            status machine + failover + cooldown / rate-limit windows
+  ▼
+Provider API
 ```
 
-- 共用 family adapter：`shared/buddy/`（4 产品）、`trae/`（2）、`qoder/`（2）；
-  其余各自独立协议实现。Core 中无 provider-specific 分支。
-- 已完成**真实账号**端到端验证：`workbuddy`、`workbuddy-cn`、`codebuddy`、`buddy-intl`。
-- 登录链路已修复但需人工浏览器授权才能完成：`qoder`、`qoder-cn`、`lobsterai`、
-  `trae`、`trae-intl`、`codearts`。
-- 外部阻塞 / 需人工：`cline`（外部注册页问题）、`raccoon`（需微信扫码）、
-  `loomy`（需手机号 SMS 登录）。
-- 详细状态、已知问题与交接说明见 **`HANDOFF.md`**。
+Supporting services: a scheduler runs `token_refresh` / `quota_sync` /
+`credit_claim` / `health_check` jobs per account; persistence is SQLite (WAL,
+schema migrations) with an in-memory fallback; an admin API (`/api/*`) manages
+accounts, logins and keys.
 
-## 快速开始
+## Features
+
+Implemented and covered by the test suite (400+ tests):
+
+- OpenAI-compatible API — `/v1/chat/completions` (streaming via SSE and
+  non-streaming) and `/v1/models`
+- Multi-provider account pool with a status machine (`active`, `cooldown`,
+  `rate_limited`, `quota_exhausted`, `needs_manual_action`, …)
+- Automatic failover between accounts: auth errors trigger one in-place token
+  refresh and retry, rate limits / quota exhaustion / transport errors switch
+  accounts, terminal errors fail fast
+- OAuth and token-refresh flows per provider; rotated refresh tokens are
+  persisted before anything else
+- Credential encryption at rest (AES-256-GCM, key derived from
+  `GATEWAY_SECRET`)
+- Quota synchronization and daily credit/check-in claims where a provider
+  supports them
+- Health checks and background jobs with bounded retries
+- Manual CAPTCHA handoff for ZCode: the gateway detects the challenge, a human
+  completes the official Aliyun widget, and the resulting token is submitted
+  through the admin API. There is deliberately no automated solver.
+- Gateway API keys for clients (hash-only storage, prefix lookup)
+- SQLite persistence (WAL, sequential migrations) with an in-memory fallback
+  when the native driver is unavailable
+- Docker deployment; images are built and published to GHCR by CI
+
+## Provider Support
+
+14 providers are registered. "Login" below means the interactive flow an
+operator completes once; after that the gateway manages the account.
+
+| Provider     | Adapter | Login mode            | Notes                                             |
+| ------------ | ------- | --------------------- | ------------------------------------------------- |
+| workbuddy    | ✅      | browser authorization | E2E verified with a real account                  |
+| workbuddy-cn | ✅      | browser authorization | E2E verified with a real account                  |
+| codebuddy    | ✅      | browser authorization | E2E verified with a real account                  |
+| buddy-intl   | ✅      | browser authorization | E2E verified with a real account                  |
+| zcode        | ✅      | OAuth (CLI flow)      | E2E verified; manual CAPTCHA handoff, see below   |
+| lobsterai    | ✅      | browser authorization | adapter implemented; login flow tested            |
+| cline        | ✅      | WorkOS device code    | adapter implemented; login flow tested            |
+| trae / trae-intl | ✅  | browser authorization | adapter implemented                               |
+| codearts     | ✅      | OAuth (PKCE + DPoP)   | adapter implemented                               |
+| qoder / qoder-cn | ✅  | device code           | adapter implemented; chat requires the client WASM binary, see below |
+| loomy        | ✅      | phone number + SMS    | adapter implemented                               |
+| raccoon      | ✅      | WeChat QR scan        | adapter implemented                               |
+
+Status is stated per account on `/v1/models` (`available`) and in the admin
+API. Not every provider has been exercised against a live account recently;
+the table reflects the current development status, not a compatibility
+guarantee.
+
+### ZCode CAPTCHA policy
+
+ZCode's upstream occasionally requires an Aliyun CAPTCHA. This gateway:
+
+1. detects the challenge from the upstream response (header or body variant),
+2. serves the **official Aliyun widget** to a human at `GET /captcha/zcode`,
+3. accepts the token the human submits and uses it for subsequent requests.
+
+There is no automated solving, no bypass, and no browser fingerprint
+spoofing — by design. Without a fresh human-completed token the account is
+parked in `needs_manual_action` and skipped by the pool.
+
+### Qoder encrypted inference
+
+Qoder's chat endpoint expects request bodies produced by the official
+client's WASM module. That binary is **proprietary and not distributed with
+this repository**. If you operate Qoder clients and legally possess the file,
+place `qoder-auth-wasm.wasm` next to `src/providers/qoder/` (or point
+`QODER_WASM_PATH` at it) — the adapter loads it at runtime. Without it,
+qoder/qoder-cn login, model listing and quota keep working, but chat requests
+fail with an explicit error. No extraction or redistribution instructions are
+provided by this project.
+
+## Requirements
+
+- Node.js ≥ 18 (Node 22 for the Docker image)
+- Docker + Docker Compose (optional, for container deployment)
+- `better-sqlite3` is an optional dependency; without it the gateway falls
+  back to in-memory storage (data is not persisted)
+
+## Quick Start
 
 ```bash
-cp .env.example .env          # 填入 GATEWAY_API_KEY / GATEWAY_SECRET / GATEWAY_ADMIN_TOKEN
-npm install                   # 本机需 Node >= 18（better-sqlite3 为 optional；缺失时自动用内存存储）
-npm run build && npm start    # 或 npm run dev
+git clone https://github.com/Xiaonan-520/multi-provider-ai-gateway.git
+cd multi-provider-ai-gateway
+cp .env.example .env          # fill in the three secrets (see Configuration)
+docker compose up -d
 curl http://127.0.0.1:8080/healthz
 ```
 
-### Docker（GHCR 镜像部署）
-
-镜像由 GitHub Actions 构建并推送到 GHCR（push 到 `main` 后自动触发）：
-
-```
-ghcr.io/xiaonan-520/multi-provider-ai-gateway:latest
-ghcr.io/xiaonan-520/multi-provider-ai-gateway:sha-<commit>
-```
-
-部署只需拉取镜像，不在服务器上构建：
+Or without Docker:
 
 ```bash
-cp .env.example .env          # compose 会读取同目录 .env
-docker compose pull
-docker compose up -d
-docker compose logs -f
+cp .env.example .env
+npm install
+npm run build && npm start    # or: npm run dev
 ```
 
-若 GHCR 包为私有，拉取前需登录（PAT 只需 `read:packages`）：
+Then register an account through the admin API (all admin endpoints take
+`Authorization: Bearer <GATEWAY_ADMIN_TOKEN>`):
 
 ```bash
-echo "<PAT>" | docker login ghcr.io -u <github-user> --password-stdin
+# start a login flow for a provider
+curl -X POST -H "Authorization: Bearer $ADMIN" \
+     -H "Content-Type: application/json" \
+     -d '{"displayName": "main"}' \
+     http://127.0.0.1:8080/api/accounts/workbuddy/login
+# poll the returned login URL / loginId until it succeeds, then chat:
+curl -X POST -H "Authorization: Bearer $KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"model": "workbuddy::glm-5.3", "messages": [{"role": "user", "content": "hi"}]}' \
+     http://127.0.0.1:8080/v1/chat/completions
 ```
 
-生产部署建议把 `GATEWAY_IMAGE_TAG` 固定为某个 `sha-<commit>` 标签，回滚即改回上一个标签并 `docker compose up -d`。
+## Configuration
 
-数据（SQLite + 加密凭据）持久化在 named volume `gateway-data`（容器内 `/data`）。
-升级不会丢数据（schema_version 顺序迁移）。**该 volume 与 `.env` 不在 GitHub 上**，
-重装前请自行备份（详见 `HANDOFF.md` §6）。
+All configuration is via environment variables (compose reads `.env`).
+
+| Variable              | Required | Description                                                                 |
+| --------------------- | -------- | --------------------------------------------------------------------------- |
+| `GATEWAY_API_KEY`     | yes      | Bearer key clients must present on `/v1/*`                                  |
+| `GATEWAY_SECRET`      | yes      | Derives the AES-256-GCM key encrypting stored credentials. Do not change after accounts exist, or stored tokens cannot be decrypted |
+| `GATEWAY_ADMIN_TOKEN` | yes      | Bearer token for the management API `/api/*`                                |
+| `DATA_DIR`            | no       | Data directory for SQLite + keys (default `./data`, `/data` in Docker)      |
+| `TZ`                  | no       | Time zone for daily credit-claim scheduling (default `Asia/Shanghai`)       |
+| `LOG_LEVEL`           | no       | `debug` / `info` / `warn` / `error` (default `info`)                        |
+| `HTTP_HOST`           | no       | Bind host (default `0.0.0.0`)                                               |
+| `HTTP_PORT`           | no       | Bind port (default `8080`)                                                  |
+| `QODER_WASM_PATH`     | no       | Absolute path to a `qoder-auth-wasm.wasm` binary you supply yourself        |
 
 ## API
 
-### OpenAI-compatible（Bearer GATEWAY_API_KEY）
+### OpenAI-compatible — `Authorization: Bearer <GATEWAY_API_KEY>`
 
-```
-GET  /v1/models                # 模型目录（含 available 标注，不含任何凭据信息）
-POST /v1/chat/completions      # stream=true 时返回 SSE（data: {...} … data: [DONE]）
+```text
+GET  /v1/models               model catalog with availability annotation
+POST /v1/chat/completions     chat; stream=true returns SSE (data: {...} … data: [DONE])
 ```
 
-### 管理（Bearer GATEWAY_ADMIN_TOKEN）
+Models can be addressed as `model` (router picks by priority/availability) or
+explicitly as `provider::model`.
 
-```
-GET    /api/providers
-GET    /api/accounts?provider=
-POST   /api/accounts                    # { provider, displayName?, credential?, providerMetadata? }
-PATCH  /api/accounts/:id
+### Management — `Authorization: Bearer <GATEWAY_ADMIN_TOKEN>`
+
+```text
+GET    /api/providers                              registered adapters
+GET    /api/accounts?provider=                     accounts + status
+POST   /api/accounts                               create (import credential)
+PATCH  /api/accounts/:id                           patch status/display/metadata
 DELETE /api/accounts/:id
-POST   /api/accounts/:provider/login             # { displayName?, phone? } 启动登录
-GET    /api/accounts/:provider/login/:loginId     # 轮询登录状态
-POST   /api/accounts/:provider/login/:loginId/credential  # { credential: {...} } 提交 code/refresh_token/AK-SK 完成交换
-POST   /api/accounts/:id/import-credential        # { credential, expiresAt? } 上传「已就绪」凭据
-POST   /api/accounts/:provider/captcha            # 仅 zcode：人工提交验证码 token
-GET    /api/jobs?type=
-GET    /api/events?limit=
+POST   /api/accounts/:provider/login               start interactive login
+GET    /api/accounts/:provider/login/:loginId      poll login status
+POST   /api/accounts/:provider/login/:loginId/credential   complete code/token exchange
+POST   /api/accounts/:id/import-credential         upload a ready credential
+POST   /api/accounts/:provider/captcha             zcode only: submit human-completed CAPTCHA token
+GET    /api/jobs?type=                             background job history
+GET    /api/events?limit=                          audit events
+POST   /api/keys                                   issue a gateway API key
+GET    /api/keys
+DELETE /api/keys/:id
 ```
 
-### 健康检查（无鉴权）
-
+```text
+GET /captcha/zcode     zcode CAPTCHA handoff page (browser, human-completed; admin token
+                       is entered in the page and sent only to this gateway)
+GET /healthz           liveness probe, no auth
 ```
-GET /healthz
+
+The management API is part of the public interface but is meant for the
+operator: it must never be exposed to untrusted networks.
+
+## Architecture
+
+```text
+src/
+├─ http/            Hono app: /v1, /api, /healthz; SSE plumbing
+├─ protocol/openai/ request parsing, response serialization, SSE frames
+├─ service/         chat orchestration (failover), models, logins, admin, API keys
+├─ core/
+│  ├─ router/       model → provider routing (explicit + fallback)
+│  ├─ pool/         account status machine + selection + failure reporting
+│  ├─ registry/     provider adapter interface + registry
+│  ├─ worker/       job scheduler (token_refresh / quota_sync / credit_claim / health_check)
+│  └─ errors/       upstream error kinds; provider-agnostic failover semantics
+├─ providers/       one directory per provider + shared protocol helpers
+└─ store/           StoreGateway interface; SQLite (WAL + migrations) and memory backends
 ```
 
-## 配置（环境变量）
+Provider adapters never leak into core: each adapter translates its upstream
+protocol into the canonical chat interfaces and maps upstream failures onto
+the shared error kinds (`AUTH_INVALID`, `RATE_LIMIT`, `QUOTA_EXHAUSTED`,
+`NEEDS_CAPTCHA`, …). Failover decisions live entirely in the pool/chat
+service.
 
-| 变量 | 说明 |
-|---|---|
-| `DATA_DIR` | SQLite/数据目录（Docker 中为 `/data`） |
-| `GATEWAY_API_KEY` | 客户端访问 `/v1` 的 Bearer key |
-| `GATEWAY_SECRET` | 派生 AES-256-GCM 密钥加密凭据；**创建账号后不可更改** |
-| `GATEWAY_ADMIN_TOKEN` | 管理 API `/api/*` 的独立 token |
-| `TZ` | 调度器每日签到的时区 |
-| `LOG_LEVEL` | debug / info / warn / error |
-| `HTTP_HOST` / `HTTP_PORT` | 监听地址（默认 0.0.0.0:8080） |
-
-## 开发
+## Development
 
 ```bash
+npm install
+npm test            # vitest, 400+ tests
 npm run typecheck   # tsc --noEmit
-npm test            # vitest（353 个测试 / 29 个文件）
-npm run build       # tsc → dist/，随后 scripts/copy-assets.mjs 复制 Qoder WASM
-npm run migrate     # 手动执行 SQLite 迁移（启动时也会自动迁移）
-npm run dev         # tsx watch
+npm run build       # tsc + asset copy into dist/
+npm run dev         # tsx watch mode
+npm run migrate     # apply SQLite migrations manually
 ```
 
-## 安全与合规边界
+### Development model: Vibe Coding / AI-assisted development
 
-- 所有 provider 凭据 AES-256-GCM 加密落库；凭据绝不进入 API 响应、日志或 `/v1/models`。
-- **不实现、不复制、不扩展任何验证码（CAPTCHA）绕过机制。** 上游要求 captcha 时，账号标记为 `needs_manual_action` 并返回结构化错误（`manual_action_required`），由管理员人工处理。
-- Credit claim 只使用平台正常提供的合法接口；当日已领取不重复调用。
+This project is a **Vibe Coding / AI-assisted development** product. Most of
+the code, tests and documentation were written with AI coding agents under
+continuous human direction. In concrete terms:
 
-## 文档
+- a human defined the requirements, architecture direction and provider
+  roadmap, reviewed changes, ran the verification, operated the production
+  deployment, and made every release decision;
+- AI agents produced the implementation, refactors, tests and much of the
+  debugging;
+- AI-generated code is not assumed correct: everything here has gone through
+  the test suite, type checking, and in several cases verification against
+  real provider accounts. Production behavior is defined by what was actually
+  tested and deployed, not by what the AI produced.
 
-- **`HANDOFF.md`（项目根目录）** — 交接文档：架构、14 个 Provider、部署、已知问题、
-  真实账号验证状态、Arch 重装后如何恢复。**新 Agent / 新会话请先读它。**
-- `docs/AUDIT_REPORT.md` — 原 deepseek-harness-codearts 源码审计
-- `docs/DESIGN_PHASE2.md` — 早期设计（数据模型 / schema / 调度 / 路由）
+No AI tool is an author or copyright holder of this project; the copyright
+and license are held by the human maintainer as stated in `LICENSE`.
+
+### Contributing
+
+Issues and pull requests are welcome. For provider adapters, please keep the
+core provider-agnostic (new providers register in `src/providers/register.ts`)
+and include tests. Note that CAPTCHA solving, bypass, or client-fingerprint
+spoofing code will not be accepted.
+
+## Docker
+
+The image is built by GitHub Actions and published to GHCR on every push to
+`main` and every `v*` tag:
+
+```bash
+docker pull ghcr.io/xiaonan-520/multi-provider-ai-gateway:latest
+```
+
+`docker-compose.yml` runs the image with the data volume `gateway-data`
+mounted at `/data`, a container healthcheck on `/healthz`, and
+`restart: unless-stopped`. Secrets come from the `.env` file next to the
+compose file — never bake them into an image. Pin `GATEWAY_IMAGE_TAG` to a
+`sha-<commit>` tag for reproducible deploys.
 
 ## License
 
-MIT
+[MIT](LICENSE) — see also [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
+for third-party credits and attribution requirements.
+
+## References & Third-Party Licenses
+
+This project references, adapts, or interoperates with other open-source
+projects. Their names, trademarks, code, and licenses remain with their
+respective authors.
+
+| Project | Repository | License | Usage |
+| ------- | ---------- | ------- | ----- |
+| deepseek-harness-codearts ("jet-hub") | [gitee.com/iJetLi/deepseek-harness-codearts](https://gitee.com/iJetLi/deepseek-harness-codearts) | MIT | Adapted code (provider protocol/signing material, Qoder WASM glue) + architecture reference |
+| deepseek-harness | [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) | MIT | Architecture reference; no source code included |
+| zcode-api | [github.com/TriDefender/zcode-api](https://github.com/TriDefender/zcode-api) | none (reference only) | Research reference for upstream captcha challenge behavior; no source code included, no authorization implied |
+| Qoder client `qoder-auth-wasm.wasm` | — | proprietary | Not distributed. Loaded at runtime only if the operator supplies their own copy |
+
+Full attribution, including the MIT notice text for jet-hub, is in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
