@@ -234,25 +234,30 @@ export function createBuddyProvider(product: BuddyProduct, fetcher: Fetcher = fe
       return chunk
     }
 
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      let newlineIndex = buffer.indexOf('\n')
-      while (newlineIndex >= 0) {
-        const line = buffer.slice(0, newlineIndex).trim()
-        buffer = buffer.slice(newlineIndex + 1)
-        if (line.startsWith('data:')) {
-          const chunk = handleData(line.slice(5).trim())
-          if (chunk) yield chunk
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        let newlineIndex = buffer.indexOf('\n')
+        while (newlineIndex >= 0) {
+          const line = buffer.slice(0, newlineIndex).trim()
+          buffer = buffer.slice(newlineIndex + 1)
+          if (line.startsWith('data:')) {
+            const chunk = handleData(line.slice(5).trim())
+            if (chunk) yield chunk
+          }
+          newlineIndex = buffer.indexOf('\n')
         }
-        newlineIndex = buffer.indexOf('\n')
       }
-    }
-    const tail = buffer.trim()
-    if (tail.startsWith('data:')) {
-      const chunk = handleData(tail.slice(5).trim())
-      if (chunk) yield chunk
+      const tail = buffer.trim()
+      if (tail.startsWith('data:')) {
+        const chunk = handleData(tail.slice(5).trim())
+        if (chunk) yield chunk
+      }
+    } finally {
+      // release the upstream connection when the consumer stops early
+      reader.cancel().catch(() => {})
     }
     yield { text: '', finishReason: finishReason ?? 'stop' }
   }

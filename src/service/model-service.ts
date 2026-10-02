@@ -5,6 +5,7 @@
  */
 import type { ModelEntry } from '../core/types.js'
 import { OpenAIApiError } from '../protocol/openai/parse.js'
+import { AccountPool } from '../core/pool/account-pool.js'
 import type { ServiceContext } from './context.js'
 
 export interface PublicModel {
@@ -64,8 +65,11 @@ export class ModelService {
   }
 
   private providerHasUsableAccount(provider: string): boolean {
+    // same predicate the pool selects with, so a routable account is never
+    // hidden from /v1/models (e.g. rate_limited past its cooldown)
+    const now = this.ctx.now()
     return this.ctx.store
       .listAccounts(provider)
-      .some((s) => s.account.enabled && s.account.status === 'active')
+      .some((s) => s.account.enabled && AccountPool.isSelectable(s.account, now))
   }
 }

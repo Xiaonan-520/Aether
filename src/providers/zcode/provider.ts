@@ -301,31 +301,38 @@ export function createZCodeProvider(options: ZCodeProviderOptions = {}): Provide
     const decoder = new TextDecoder()
     let buffer = ''
     let sawFinish = false
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      let index = buffer.indexOf('\n')
-      while (index >= 0) {
-        const line = buffer.slice(0, index).trim()
-        buffer = buffer.slice(index + 1)
-        if (line.startsWith('data:')) {
-          const payload = line.slice(5).trim()
-          if (payload !== '' && payload !== '[DONE]') {
-            try {
-              const event = JSON.parse(payload) as Record<string, unknown>
-              const chunk = anthropicEventToChunk(event)
-              if (chunk) {
-                if (chunk.finishReason) sawFinish = true
-                yield chunk
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        let index = buffer.indexOf('\n')
+        while (index >= 0) {
+          const line = buffer.slice(0, index).trim()
+          buffer = buffer.slice(index + 1)
+          if (line.startsWith('data:')) {
+            const payload = line.slice(5).trim()
+            if (payload !== '' && payload !== '[DONE]') {
+              try {
+                const event = JSON.parse(payload) as Record<string, unknown>
+                const chunk = anthropicEventToChunk(event)
+                if (chunk) {
+                  if (chunk.finishReason) sawFinish = true
+                  yield chunk
+                }
+              } catch (err) {
+                // a mapped upstream error must propagate; only malformed
+                // events are ignorable
+                if (err instanceof UpstreamError) throw err
               }
-            } catch {
-              // ignore malformed event
             }
           }
+          index = buffer.indexOf('\n')
         }
-        index = buffer.indexOf('\n')
       }
+    } finally {
+      // release the upstream connection when the consumer stops early
+      reader.cancel().catch(() => {})
     }
     if (!sawFinish) yield { text: '', finishReason: 'stop' }
   }
@@ -436,7 +443,14 @@ export function createZCodeProvider(options: ZCodeProviderOptions = {}): Provide
           if (err instanceof ZCodeCaptchaUnavailableError) throw needsCaptchaError(err)
           throw err
         }
-        return fromAnthropicResponse((await response.json()) as Record<string, unknown>)
+        let payload: Record<string, unknown>
+        try {
+          payload = (await response.json()) as Record<string, unknown>
+        } catch {
+          // upstream returned HTML/empty body etc; make it failover-able
+          throw new UpstreamError({ kind: 'EMPTY_RESPONSE', message: 'zcode: non-JSON response body' })
+        }
+        return fromAnthropicResponse(payload)
       },
       stream(ctx: ProviderCtx, req: ChatRequest, account: Account, _tools?: Tool[]): AsyncIterable<ChatChunk> {
         const model = bareModel(req.model)

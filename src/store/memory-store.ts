@@ -169,6 +169,22 @@ export class MemoryStore implements StoreGateway {
     )
   }
 
+  pruneHistory(beforeMs: number): { jobs: number; events: number } {
+    const terminal = new Set(['done', 'failed', 'cancelled'])
+    let jobs = 0
+    for (const [id, job] of this.jobs) {
+      if (terminal.has(job.status) && job.finishedAt !== null && job.finishedAt < beforeMs) {
+        this.jobs.delete(id)
+        jobs++
+      }
+    }
+    const before = this.events.length
+    for (let i = this.events.length - 1; i >= 0; i--) {
+      if ((this.events[i].ts as number) < beforeMs) this.events.splice(i, 1)
+    }
+    return { jobs, events: before - this.events.length }
+  }
+
   addEvent(event: Record<string, unknown>): void {
     this.events.push({ ...event })
   }

@@ -23,6 +23,7 @@ import type {
   ApiKeyRecord,
 } from '../types.js'
 import { MIGRATIONS } from './schema.js'
+import { dayKey } from '../memory-store.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires */
 
@@ -509,9 +510,12 @@ export class SqliteStore implements StoreGateway {
       .prepare(
         `INSERT INTO credit_claims (
            account_id, provider, claim_type, claim_date, claimed_at, outcome_json
-         ) VALUES (?, ?, ?, date(?, 'unixepoch'), ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .run(accountId, provider, type, Math.floor(at / 1000), at, JSON.stringify(outcome))
+      // same local-timezone day key as the memory store / executors, not UTC:
+      // a UTC key lost claims made between 00:00 and 08:00 Beijing time and
+      // tripped the UNIQUE constraint on the retry
+      .run(accountId, provider, type, dayKey(at), at, JSON.stringify(outcome))
   }
 
   isClaimedToday(accountId: string, type: string, dateKey: string): boolean {
@@ -614,6 +618,20 @@ export class SqliteStore implements StoreGateway {
       )
       .all(jobType, now) as JobRow[]
     return rows.map(rowToJob)
+  }
+
+  pruneHistory(beforeMs: number): { jobs: number; events: number } {
+    // pending/running jobs are never pruned regardless of age; events have no
+    // terminal state, so age is the only criterion
+    const jobs = this.db
+      .prepare(
+        `DELETE FROM jobs
+         WHERE status IN ('done', 'failed', 'cancelled')
+           AND finished_at IS NOT NULL AND finished_at < ?`,
+      )
+      .run(beforeMs)
+    const events = this.db.prepare('DELETE FROM events WHERE ts < ?').run(beforeMs)
+    return { jobs: jobs.changes, events: events.changes }
   }
 
   // -- events -----------------------------------------------------------------

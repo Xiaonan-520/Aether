@@ -66,12 +66,15 @@ export function toAnthropicBody(req: ChatRequest, upstreamModel: string): Record
   return body
 }
 
+import { UpstreamError } from '../../core/errors/upstream-error.js'
+
 interface AnthropicEvent {
   type?: string
   delta?: { type?: string; text?: string; thinking?: string; stop_reason?: string }
   message?: { usage?: { input_tokens?: number; output_tokens?: number } }
   usage?: { input_tokens?: number; output_tokens?: number }
   content_block?: { type?: string }
+  error?: { message?: string }
 }
 
 /** One Anthropic SSE event → canonical chunk (or undefined when ignorable). */
@@ -84,6 +87,12 @@ export function anthropicEventToChunk(event: AnthropicEvent): ChatChunk | undefi
       return { text: '', reasoning: event.delta.thinking }
     }
     return undefined
+  }
+  // mid-stream upstream failure: surface it instead of ending the stream as a
+  // clean stop (which would report success and truncate the client's text)
+  if (event.type === 'error') {
+    const detail = event.error && typeof event.error.message === 'string' ? event.error.message : 'upstream stream error'
+    throw new UpstreamError({ kind: 'UPSTREAM_5XX', message: `zcode: ${detail}` })
   }
   if (event.type === 'message_delta') {
     const stop = event.delta?.stop_reason

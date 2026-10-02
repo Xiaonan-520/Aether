@@ -15,6 +15,7 @@ import { UpstreamError } from '../core/errors/upstream-error.js'
 import { OpenAIApiError } from '../protocol/openai/parse.js'
 import type { ServiceContext } from './context.js'
 import { resolveCredentialJson } from './context.js'
+import { AccountPool } from '../core/pool/account-pool.js'
 import type { ProviderCtx } from '../core/registry/provider.js'
 
 /** How many accounts may be tried for a single client request. */
@@ -200,9 +201,12 @@ export class ChatService {
   }
 
   private providerHasUsableAccount(provider: string): boolean {
+    // same predicate the pool selects with, so a routable account is never
+    // hidden from /v1/models (e.g. rate_limited past its cooldown)
+    const now = this.ctx.now()
     return this.ctx.store
       .listAccounts(provider)
-      .some((s) => s.account.enabled && s.account.status === 'active')
+      .some((s) => s.account.enabled && AccountPool.isSelectable(s.account, now))
   }
 
   private asUpstreamError(err: unknown, provider: string): UpstreamError {

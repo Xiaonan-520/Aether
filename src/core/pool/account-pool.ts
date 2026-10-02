@@ -111,7 +111,10 @@ export class AccountPool {
       account.status === 'active' ||
       account.status === 'healthy_low_quota' ||
       // cooldown status with an expired cooldown window falls back to active
-      (account.status === 'cooldown' && (account.cooldownUntil === null || account.cooldownUntil <= now))
+      (account.status === 'cooldown' && (account.cooldownUntil === null || account.cooldownUntil <= now)) ||
+      // rate_limited recovers via the same cooldown clock; without this a single
+      // 429 on a non-refreshable provider would park the account forever
+      (account.status === 'rate_limited' && (account.cooldownUntil === null || account.cooldownUntil <= now))
     )
   }
 

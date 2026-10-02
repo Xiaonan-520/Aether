@@ -31,8 +31,15 @@ export interface SchedulerOptions {
   maxConcurrent?: number
   /** token refresh lead time: refresh when expiry - now <= this (default 1h) */
   refreshLeadMs?: number
+  /** non-terminal jobs fail permanently after this many attempts (default 8) */
+  maxAttempts?: number
   logger?: (level: string, message: string, extra?: Record<string, unknown>) => void
 }
+
+/** History retention: terminal jobs and audit events older than 7 days go. */
+const HISTORY_RETENTION_MS = 7 * 24 * 3_600_000
+/** Minimum gap between prune sweeps (at most one per hour). */
+const PRUNE_INTERVAL_MS = 3_600_000
 
 /** Enqueue window generators used by the built-in recurring scans. */
 interface ScanDefinition {
@@ -76,13 +83,14 @@ const SCANS: ScanDefinition[] = [
 export class Scheduler {
   private readonly store: StoreGateway
   private readonly registry: ProviderRegistry
-  private readonly opts: Required<Pick<SchedulerOptions, 'tickIntervalMs' | 'maxConcurrent' | 'refreshLeadMs'>> &
+  private readonly opts: Required<Pick<SchedulerOptions, 'tickIntervalMs' | 'maxConcurrent' | 'refreshLeadMs' | 'maxAttempts'>> &
     SchedulerOptions
   private timer: NodeJS.Timeout | null = null
   private running = 0
   private lastScanAt = new Map<JobType, number>()
   private inFlight = new Set<string>()
   private stopping = false
+  private lastPruneAt = 0
   /** pluggable executors (mocked in tests; default implementations come with 3B adapters) */
   private readonly executors = new Map<JobType, (job: Job, account: Account) => Promise<unknown>>()
 
@@ -91,6 +99,7 @@ export class Scheduler {
       tickIntervalMs: opts.tickIntervalMs ?? 60_000,
       maxConcurrent: opts.maxConcurrent ?? 4,
       refreshLeadMs: opts.refreshLeadMs ?? 3_600_000,
+      maxAttempts: opts.maxAttempts ?? 8,
       ...opts,
     }
     this.store = opts.store
@@ -132,6 +141,7 @@ export class Scheduler {
     if (this.stopping) return
     const now = this.now()
     this.scanRecurring(now)
+    this.pruneHistory(now)
     const due = this.collectDueJobs(now)
     for (const job of due) {
       if (this.running >= this.opts.maxConcurrent) break
@@ -141,6 +151,20 @@ export class Scheduler {
       void this.runJob(job).finally(() => {
         this.inFlight.delete(job.id)
         this.running--
+      })
+    }
+  }
+
+  /** Drop terminal jobs + audit events older than the retention window,
+   *  at most once per hour: the scans enqueue ~2.8k rows/day otherwise. */
+  private pruneHistory(now: number): void {
+    if (now - this.lastPruneAt < PRUNE_INTERVAL_MS) return
+    this.lastPruneAt = now
+    try {
+      this.store.pruneHistory(now - HISTORY_RETENTION_MS)
+    } catch (err) {
+      this.opts.logger?.('warn', 'history pruning failed', {
+        error: err instanceof Error ? err.message : String(err),
       })
     }
   }
@@ -233,7 +257,12 @@ export class Scheduler {
         this.store.updateJob(job.id, { status: 'failed', error: error.message, attempts, finishedAt: this.now() })
         return
       }
-      // retry with exponential backoff
+      // retry with exponential backoff, but never churn forever: past the
+      // attempt budget the job fails and the next recurring scan re-enqueues it
+      if (attempts >= this.opts.maxAttempts) {
+        this.store.updateJob(job.id, { status: 'failed', error: error.message, attempts, finishedAt: this.now() })
+        return
+      }
       const delay = retryDelayMs(error.kind ?? 'TRANSPORT', attempts)
       this.store.updateJob(job.id, {
         status: 'pending',

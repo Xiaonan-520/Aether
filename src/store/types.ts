@@ -100,6 +100,8 @@ export interface StoreGateway {
   updateJob(id: string, patch: Partial<Job>): void
   listJobs(jobType?: string): Job[]
   nextDueJobs(jobType: string, now: number): Job[]
+  /** Delete terminal jobs and events older than `beforeMs`; returns rows removed. */
+  pruneHistory(beforeMs: number): { jobs: number; events: number }
 
   /** Audit events. */
   addEvent(event: Record<string, unknown>): void
