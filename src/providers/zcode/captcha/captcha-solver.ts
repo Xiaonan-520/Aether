@@ -119,13 +119,15 @@ gateway and used for subsequent ZCode requests.</p>
 <button id="btn">Start verification</button>
 <pre id="status"></pre>
 <script>
-  var status = document.getElementById('status');
+  // NOTE: never name this variable 'status' — window.status is a legacy string
+  // setter and silently swallows the assignment, blanking all page feedback.
+  var statusEl = document.getElementById('status');
   var tokenInput = document.getElementById('token');
   var preset = new URLSearchParams(location.search).get('token');
   if (preset) tokenInput.value = preset;
   function log(kind, message) {
-    status.className = kind;
-    status.textContent = message;
+    statusEl.className = kind;
+    statusEl.textContent = message;
   }
   function submitToken(captchaVerifyParam) {
     var token = tokenInput.value.trim();

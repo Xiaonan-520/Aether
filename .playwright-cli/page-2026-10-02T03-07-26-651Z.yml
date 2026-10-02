@@ -1,0 +1,8 @@
+- generic [active] [ref=e1]:
+  - heading "ZCode captcha authorization" [level=1] [ref=e2]
+  - paragraph [ref=e3]: Complete the verification below. It is the official Aliyun widget in your real browser — nothing is automated. On success the token is submitted to the gateway and used for subsequent ZCode requests.
+  - generic [ref=e5]:
+    - text: Gateway admin token (required to submit — it is sent only to this gateway)
+    - textbox "Gateway admin token (required to submit — it is sent only to this gateway)" [ref=e6]:
+      - /placeholder: GATEWAY_ADMIN_TOKEN
+  - button "Start verification" [ref=e7]
