@@ -1,11 +1,13 @@
 /**
  * ZCode provider (Z.AI coding plan, Anthropic Messages upstream).
  *
- * Captcha policy: requests carry the cached `X-Aliyun-Captcha-Verify-Param`
- * token. When no token is cached the adapter fails with NEEDS_CAPTCHA instead
- * of trying to solve it; an operator supplies a token obtained from a normal
- * browser session. Captcha 403s invalidate the cache and surface the same
- * error so the caller can prompt again — never an automatic solve.
+ * Captcha policy: the captcha is *conditional*. A cached verify param is sent
+ * when available, but requests are never blocked on it — if upstream issues a
+ * challenge (403 header variant or the in-body `{"code":3007}` variant) the
+ * token cache is invalidated and the injected CaptchaHandler chain gets one
+ * chance to produce a fresh token before the request is retried once. When no
+ * handler can resolve the challenge the adapter surfaces NEEDS_CAPTCHA, which
+ * the pool maps onto `needs_manual_action`. Never an automatic solve.
  */
 import type {
   Account,
@@ -26,7 +28,16 @@ import type {
   RefreshResult,
 } from '../../core/registry/provider.js'
 import { UpstreamError } from '../../core/errors/upstream-error.js'
-import { ZCodeCaptchaManager, ZCodeCaptchaUnavailableError } from './captcha.js'
+import {
+  ZCodeCaptchaManager,
+  ZCodeCaptchaUnavailableError,
+  detectCaptchaChallenge,
+  looksLikeCaptchaText,
+  ManualCaptchaHandler,
+  CaptchaHandlerChain,
+  type CaptchaChallenge,
+  type CaptchaHandler,
+} from './captcha/index.js'
 import {
   ZCodePollRateLimitedError,
   ZCODE_QUOTA,
@@ -67,16 +78,20 @@ interface LoginSession {
 }
 
 export interface ZCodeProviderOptions {
+  /** shared manual-submission token cache (also used by the admin API) */
   captcha?: ZCodeCaptchaManager
+  /** pluggable handler chain; defaults to a manual handler over `captcha` */
+  captchaHandler?: CaptchaHandler
   fetcher?: Fetcher
-  /** max captcha retries per request (mirrors the reference bridge) */
+  /** legacy knob kept for tests: 1 disables the challenge retry */
   maxCaptchaRetries?: number
 }
 
 export function createZCodeProvider(options: ZCodeProviderOptions = {}): Provider {
   const fetcher = options.fetcher ?? fetch
   const captcha = options.captcha ?? new ZCodeCaptchaManager()
-  const maxCaptchaRetries = options.maxCaptchaRetries ?? 3
+  const handler: CaptchaHandler = options.captchaHandler
+    ?? new CaptchaHandlerChain([new ManualCaptchaHandler(captcha)])
   const sessions = new Map<string, LoginSession>()
 
   const capabilities: ProviderCapabilities = {
@@ -119,41 +134,45 @@ export function createZCodeProvider(options: ZCodeProviderOptions = {}): Provide
     return headers
   }
 
+  /**
+   * POST the upstream Anthropic endpoint.
+   *
+   * Captcha challenges are detected here (403 header / in-body 3007): the
+   * cached token is invalidated and a `ZCodeCaptchaUnavailableError` is thrown
+   * so the single-retry loop can ask the handler chain for a fresh token.
+   */
   async function postMessages(
     credential: ZCodeCredential,
     req: ChatRequest,
     upstreamModel: string,
-    verifyParam: string,
+    verifyParam: string | null,
   ): Promise<Response> {
     const response = await fetcher(upstreamFor(credential), {
       method: 'POST',
       headers: chatHeaders(credential, verifyParam),
       body: JSON.stringify(toAnthropicBody(req, upstreamModel)),
     })
-    if (response.status === 403 && (await looksLikeCaptchaError(response))) {
-      captcha.invalidate()
-      throw new ZCodeCaptchaUnavailableError('expired', 'captcha token rejected by upstream (403)')
+    if (!response.ok) {
+      const challenge = await detectCaptchaChallenge(response)
+      const text = challenge?.detail ?? await peekErrorText(response)
+      if (challenge || (response.status === 403 && looksLikeCaptchaText(text))) {
+        captcha.invalidate()
+        throw new ZCodeCaptchaUnavailableError('expired', `captcha rejected by upstream (${challenge?.kind ?? 'rejected_403'}${challenge ? `, ${challenge.rejectClass}` : ''})`)
+      }
+      throw await toUpstreamError(response, text)
     }
-    if (!response.ok) throw await toUpstreamError(response)
     return response
   }
 
-  async function looksLikeCaptchaError(response: Response): Promise<boolean> {
+  async function peekErrorText(response: Response): Promise<string> {
     try {
-      const text = (await response.clone().text()).toLowerCase()
-      return text.includes('captcha') || text.includes('verify token') || text.includes('verify failed')
+      return (await response.clone().text()).slice(0, 300)
     } catch {
-      return false
+      return ''
     }
   }
 
-  async function toUpstreamError(response: Response): Promise<UpstreamError> {
-    let text = ''
-    try {
-      text = (await response.text()).slice(0, 300)
-    } catch {
-      text = ''
-    }
+  async function toUpstreamError(response: Response, text: string): Promise<UpstreamError> {
     const lower = text.toLowerCase()
     if (response.status === 401) {
       return new UpstreamError({ kind: 'AUTH_INVALID', message: `zcode auth error: ${text}`, status: 401 })
@@ -182,13 +201,45 @@ export function createZCodeProvider(options: ZCodeProviderOptions = {}): Provide
     })
   }
 
-  /** Resolve a captcha token or fail with NEEDS_CAPTCHA (never auto-solve). */
-  function requireCaptcha(): string {
+  /** First challenge of a request: cached token when present, no error otherwise. */
+  function initialChallenge(): CaptchaChallenge {
+    return { kind: 'initial' }
+  }
+
+  /**
+   * Resolve a token through the handler chain. A failed chain throws the
+   * canonical NEEDS_CAPTCHA error — never a fabricated token.
+   */
+  async function resolveCaptcha(challenge: CaptchaChallenge): Promise<string> {
+    const result = await handler.handle(challenge)
+    if (result.ok) return result.verifyParam
+    throw new ZCodeCaptchaUnavailableError('needs_manual_action', 'captcha token unavailable; complete the verification and submit it via POST /api/accounts/zcode/captcha')
+  }
+
+  /**
+   * Full retry flow used by chat + stream: first attempt with whatever the
+   * handler chain (or cache) provides — possibly no token at all (conditional
+   * captcha: coding-plan requests may never be challenged) — then on a
+   * rejected token exactly one resolve+retry.
+   */
+  async function sendWithRetry(
+    credential: ZCodeCredential,
+    req: ChatRequest,
+    upstreamModel: string,
+  ): Promise<Response> {
+    let verifyParam: string | null = null
     try {
-      return captcha.getToken()
+      verifyParam = await resolveCaptcha(initialChallenge())
     } catch (err) {
-      if (err instanceof ZCodeCaptchaUnavailableError) throw needsCaptchaError(err)
-      throw err
+      if (!(err instanceof ZCodeCaptchaUnavailableError)) throw err
+    }
+    try {
+      return await postMessages(credential, req, upstreamModel, verifyParam)
+    } catch (err) {
+      if (!(err instanceof ZCodeCaptchaUnavailableError)) throw err
+      const challenge: CaptchaChallenge = { kind: 'rejected_403', rejectClass: 'unknown', detail: err.message }
+      const fresh = await resolveCaptcha(challenge) // throws NEEDS_CAPTCHA when unavailable
+      return postMessages(credential, req, upstreamModel, fresh)
     }
   }
 
@@ -236,7 +287,15 @@ export function createZCodeProvider(options: ZCodeProviderOptions = {}): Provide
     req: ChatRequest,
     upstreamModel: string,
   ): AsyncGenerator<ChatChunk> {
-    const response = await postMessages(credential, { ...req, stream: true }, upstreamModel, requireCaptcha())
+    // Same retry flow as chat(); captcha errors are mapped here so the pool
+    // sees NEEDS_CAPTCHA (→ needs_manual_action) instead of a raw error.
+    let response: Response
+    try {
+      response = await sendWithRetry(credential, { ...req, stream: true }, upstreamModel)
+    } catch (err) {
+      if (err instanceof ZCodeCaptchaUnavailableError) throw needsCaptchaError(err)
+      throw err
+    }
     if (!response.body) throw new UpstreamError({ kind: 'EMPTY_RESPONSE', message: 'zcode: empty response body' })
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
@@ -285,7 +344,12 @@ export function createZCodeProvider(options: ZCodeProviderOptions = {}): Provide
           authUrl: flow.authorizeUrl,
           startedAt: Date.now(),
         })
-        return { loginUrl: flow.authorizeUrl, expiresIn: 300, pollInterval: 2 }
+        // Server-imposed deadline wins over the local 5-minute cap when init
+        // reported one; the poll interval likewise follows the server value.
+        const expiresIn = flow.expiresAt
+          ? Math.max(30, Math.min(600, Math.round((flow.expiresAt - Date.now()) / 1000)))
+          : 300
+        return { loginUrl: flow.authorizeUrl, expiresIn, pollInterval: flow.pollInterval ?? 2 }
       },
       async pollLogin(accountId: string): Promise<PollLoginResult> {
         const session = sessions.get(accountId)
@@ -365,19 +429,14 @@ export function createZCodeProvider(options: ZCodeProviderOptions = {}): Provide
         if (!credential) throw new UpstreamError({ kind: 'AUTH_INVALID', message: 'zcode: no credential' })
         const model = bareModel(req.model)
         const upstreamModel = MODEL_NAME_MAP[model.toLowerCase()] ?? model
-        let lastError: unknown
-        for (let attempt = 0; attempt < maxCaptchaRetries; attempt++) {
-          try {
-            const response = await postMessages(credential, { ...req, stream: false }, upstreamModel, requireCaptcha())
-            return fromAnthropicResponse((await response.json()) as Record<string, unknown>)
-          } catch (err) {
-            lastError = err
-            if (err instanceof ZCodeCaptchaUnavailableError) continue
-            throw err
-          }
+        let response: Response
+        try {
+          response = await sendWithRetry(credential, { ...req, stream: false }, upstreamModel)
+        } catch (err) {
+          if (err instanceof ZCodeCaptchaUnavailableError) throw needsCaptchaError(err)
+          throw err
         }
-        if (lastError instanceof ZCodeCaptchaUnavailableError) throw needsCaptchaError(lastError)
-        throw lastError
+        return fromAnthropicResponse((await response.json()) as Record<string, unknown>)
       },
       stream(ctx: ProviderCtx, req: ChatRequest, account: Account, _tools?: Tool[]): AsyncIterable<ChatChunk> {
         const model = bareModel(req.model)
@@ -392,4 +451,4 @@ export function createZCodeProvider(options: ZCodeProviderOptions = {}): Provide
   }
 }
 
-export { ZCodeCaptchaManager } from './captcha.js'
+export { ZCodeCaptchaManager } from './captcha/index.js'

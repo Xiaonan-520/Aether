@@ -74,6 +74,10 @@ export interface ZCodeLoginStart {
   authorizeUrl: string
   /** opaque per-flow secret echoed back on poll (never shown to clients) */
   pollToken: string
+  /** server-imposed flow deadline (unix ms), when init reported one */
+  expiresAt?: number
+  /** server-recommended poll interval (s), when init reported one */
+  pollInterval?: number
 }
 
 export function randomPollToken(): string {
@@ -101,7 +105,15 @@ export async function startOAuth(
   const flowId = typeof data.flow_id === 'string' ? data.flow_id : ''
   const authorizeUrl = typeof data.authorize_url === 'string' ? data.authorize_url : ''
   if (!flowId || !authorizeUrl) throw new Error('zcode oauth init returned incomplete flow data')
-  return { flowId, authorizeUrl, pollToken }
+  // Optional server-side flow metadata (mirrors the reference client): the
+  // deadline caps how long polling may continue, the interval spaces polls.
+  const expiresAt = typeof data.expires_at === 'number' && data.expires_at > 0
+    ? data.expires_at * 1000
+    : undefined
+  const pollInterval = typeof data.poll_interval_sec === 'number' && data.poll_interval_sec > 0
+    ? data.poll_interval_sec
+    : undefined
+  return { flowId, authorizeUrl, pollToken, expiresAt, pollInterval }
 }
 
 export interface ZCodePollResult {
@@ -126,7 +138,7 @@ export class ZCodePollRateLimitedError extends Error {
 }
 
 export interface ZCodePollOptions {
-  /** max retries when the poll is rate limited (default 3) */
+  /** max transient-failure retries: 429 / 408 / 5xx / network (default 3) */
   maxRetries?: number
   /** base backoff in ms (default 1000); doubles per attempt */
   baseBackoffMs?: number
@@ -146,29 +158,51 @@ export async function pollOAuth(
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
   const url = `${ZCODE_API_BASE}/oauth/cli/poll/${encodeURIComponent(flowId)}`
 
+  /** Poll error semantics mirror the reference client: 408/429/5xx and
+   *  network errors are transient (retry with backoff, honouring
+   *  `retry-after`); other 4xx are fatal; a malformed 200 body counts as
+   *  "still pending" so the outer poll loop simply tries again. */
   let attempt = 0
-  let response: Response
   for (;;) {
-    response = await fetcher(url, {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${pollToken}` },
-      signal,
-    })
-    if (response.status !== 429) break
-    if (attempt >= maxRetries) {
-      // Surface a structured, retryable error instead of an unhandled throw.
-      const header = Number(response.headers.get('retry-after'))
-      const retryAfterMs = Number.isFinite(header) && header > 0 ? header * 1000 : baseBackoffMs * 2 ** attempt
-      throw new ZCodePollRateLimitedError(retryAfterMs)
+    let response: Response
+    try {
+      response = await fetcher(url, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${pollToken}` },
+        signal,
+      })
+    } catch (err) {
+      // Network error: transient unless the signal was aborted.
+      if (signal?.aborted) throw err
+      if (attempt >= maxRetries) throw err
+      await sleep(baseBackoffMs * 2 ** attempt)
+      attempt += 1
+      continue
     }
-    const header = Number(response.headers.get('retry-after'))
-    const waitMs = Number.isFinite(header) && header > 0 ? header * 1000 : baseBackoffMs * 2 ** attempt
-    await sleep(waitMs)
-    attempt += 1
-  }
-  if (!response.ok) throw new Error(`zcode oauth poll HTTP ${response.status}`)
-  const json = (await response.json()) as Record<string, unknown>
-  const data = (json.data ?? {}) as Record<string, unknown>
+    const transient = response.status === 429 || response.status === 408 || response.status >= 500
+    if (transient) {
+      if (attempt >= maxRetries) {
+        if (response.status === 429) {
+          const header = Number(response.headers.get('retry-after'))
+          const retryAfterMs = Number.isFinite(header) && header > 0 ? header * 1000 : baseBackoffMs * 2 ** attempt
+          throw new ZCodePollRateLimitedError(retryAfterMs)
+        }
+        throw new Error(`zcode oauth poll HTTP ${response.status}`)
+      }
+      const header = Number(response.headers.get('retry-after'))
+      const waitMs = Number.isFinite(header) && header > 0 ? header * 1000 : baseBackoffMs * 2 ** attempt
+      await sleep(waitMs)
+      attempt += 1
+      continue
+    }
+    if (!response.ok) throw new Error(`zcode oauth poll HTTP ${response.status}`)
+    let json: Record<string, unknown>
+    try {
+      json = (await response.json()) as Record<string, unknown>
+    } catch {
+      return { ready: false }
+    }
+    const data = (json.data ?? {}) as Record<string, unknown>
   const status = typeof data.status === 'string' ? data.status : ''
   const token = typeof data.token === 'string' ? data.token : ''
   const accessToken = typeof data.access_token === 'string'
@@ -183,6 +217,7 @@ export async function pollOAuth(
     }
   }
   return { ready: false }
+  }
 }
 
 /**

@@ -21,7 +21,7 @@ import { createQoderProvider } from './qoder/index.js'
 import { QODER, QODER_CN } from './qoder/product.js'
 import { createRaccoonProvider } from './raccoon/index.js'
 import { createZCodeProvider } from './zcode/index.js'
-import { ZCodeCaptchaManager } from './zcode/captcha.js'
+import { ZCodeCaptchaManager } from './zcode/captcha/index.js'
 
 export interface RegisteredProviders {
   captcha: ZCodeCaptchaManager

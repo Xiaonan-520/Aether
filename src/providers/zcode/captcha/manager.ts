@@ -1,46 +1,23 @@
 /**
- * ZCode CAPTCHA lifecycle manager.
+ * Shared captcha token cache for human-submitted verify params.
  *
- * Modeled on the legitimate lifecycle used by the community `zcode_proxy`
- * bridge: a captcha configuration is fetched from ZCode, a *human* completes
- * the Aliyun verification in a real browser, and the resulting `verifyParam`
- * token is cached, reused across concurrent requests and invalidated on 403.
+ * A *human* completes the Aliyun verification in a real browser (admin API
+ * submission or the `/api/accounts/zcode/captcha/authorize` page); the
+ * resulting `verifyParam` token is cached, reused across concurrent requests
+ * and invalidated when upstream rejects it.
  *
  * The Gateway deliberately does NOT automate, bypass or solve the captcha:
- * there is no headless/stealth browser here. When a token is required and none
- * is cached, the adapter reports `needs_manual_action` and the operator submits
- * a token obtained from a normal browser session via the admin API.
+ * there is no headless/stealth browser here. When a token is required and
+ * none is cached, callers report `needs_manual_action`.
  *
- * What is reused from zcode_proxy: token cache + TTL, single-flight, config
- * cache, invalidate-on-403 and the retry shape. What is NOT reused: any
- * browser automation / anti-detection.
+ * Reused from the community bridge: token cache + TTL, single-flight and the
+ * invalidate-on-reject shape. What is NOT reused: any browser automation /
+ * anti-detection.
  */
+import { CaptchaConfigCache, DEFAULT_CAPTCHA_CONFIG, type ZCodeCaptchaConfig } from './captcha-config.js'
 
-export interface ZCodeCaptchaConfig {
-  enabled: boolean
-  prefix: string
-  region: string
-  sceneId: string
-}
-
-const DEFAULT_CONFIG: ZCodeCaptchaConfig = {
-  enabled: true,
-  prefix: 'no8xfe',
-  region: 'sgp',
-  sceneId: '11xygtvd',
-}
-
-export interface CaptchaManagerOptions {
-  /** how long a submitted verifyParam stays valid (ms); default 45s */
-  cacheTtlMs?: number
-  /** how long the fetched captcha config is cached (ms); default 10min */
-  configTtlMs?: number
-  /** clock injection for tests */
-  now?: () => number
-  fetcher?: typeof fetch
-  /** config endpoint */
-  configUrl?: string
-}
+export { DEFAULT_CAPTCHA_CONFIG }
+export type { ZCodeCaptchaConfig }
 
 export type CaptchaError = 'needs_manual_action' | 'expired'
 
@@ -53,12 +30,24 @@ export class ZCodeCaptchaUnavailableError extends Error {
   }
 }
 
+export interface CaptchaManagerOptions {
+  /** how long a submitted verifyParam stays valid (ms); default 45s */
+  cacheTtlMs?: number
+  /** how long the fetched captcha config is cached (ms); default 60s */
+  configTtlMs?: number
+  /** clock injection for tests */
+  now?: () => number
+  fetcher?: typeof fetch
+  /** config endpoint */
+  configUrl?: string
+}
+
 /**
  * Single-flight captcha token cache.
  *
- * Concurrent `getToken()` calls share one wait: the first call parks a promise
- * and every other caller awaits the same one, so N parallel chat requests never
- * produce N captcha prompts.
+ * Concurrent `waitForToken()` calls share one wait: the first call parks a
+ * promise and every other caller awaits the same one, so N parallel chat
+ * requests never produce N captcha prompts.
  */
 export class ZCodeCaptchaManager {
   private cachedParam: string | null = null
@@ -66,22 +55,20 @@ export class ZCodeCaptchaManager {
   private pending: Promise<string> | null = null
   private resolvePending: ((value: string) => void) | null = null
   private rejectPending: ((err: Error) => void) | null = null
-  private configCache: ZCodeCaptchaConfig | null = null
-  private configCachedAt = 0
+  private readonly configCache: CaptchaConfigCache
 
   private readonly cacheTtlMs: number
-  private readonly configTtlMs: number
   private readonly now: () => number
-  private readonly fetcher: typeof fetch
-  private readonly configUrl: string
 
   constructor(options: CaptchaManagerOptions = {}) {
     this.cacheTtlMs = options.cacheTtlMs ?? 45_000
-    this.configTtlMs = options.configTtlMs ?? 600_000
     this.now = options.now ?? (() => Date.now())
-    this.fetcher = options.fetcher ?? fetch
-    this.configUrl = options.configUrl
-      ?? 'https://zcode.z.ai/api/v1/client/configs?app_version=3.0.0&platform=win32'
+    this.configCache = new CaptchaConfigCache({
+      configTtlMs: options.configTtlMs,
+      now: options.now,
+      fetcher: options.fetcher,
+      configUrl: options.configUrl,
+    })
   }
 
   /** Is a token currently cached and unexpired? */
@@ -95,32 +82,11 @@ export class ZCodeCaptchaManager {
   }
 
   /**
-   * Fetch the captcha configuration (prefix/region/sceneId), cached for
-   * configTtlMs, falling back to the built-in defaults.
+   * Fetch the captcha configuration (prefix/region/sceneId), cached with a
+   * positive/negative window, falling back to the built-in defaults.
    */
   async fetchConfig(): Promise<ZCodeCaptchaConfig> {
-    if (this.configCache && this.now() - this.configCachedAt < this.configTtlMs) return this.configCache
-    try {
-      const response = await this.fetcher(this.configUrl)
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      const json = (await response.json()) as Record<string, unknown>
-      const data = json.data as Record<string, unknown> | undefined
-      const configs = data?.configs as Record<string, unknown> | undefined
-      const captcha = configs?.captcha as Record<string, unknown> | undefined
-      if (captcha) {
-        this.configCache = {
-          enabled: captcha.enabled !== false,
-          prefix: typeof captcha.prefix === 'string' ? captcha.prefix : DEFAULT_CONFIG.prefix,
-          region: typeof captcha.region === 'string' ? captcha.region : DEFAULT_CONFIG.region,
-          sceneId: typeof captcha.sceneId === 'string' ? captcha.sceneId : DEFAULT_CONFIG.sceneId,
-        }
-        this.configCachedAt = this.now()
-        return this.configCache
-      }
-    } catch {
-      // fall through to defaults
-    }
-    return DEFAULT_CONFIG
+    return this.configCache.get()
   }
 
   /**

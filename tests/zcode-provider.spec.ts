@@ -4,7 +4,8 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { createZCodeProvider } from '../src/providers/zcode/index.js'
-import { ZCodeCaptchaManager } from '../src/providers/zcode/captcha.js'
+import { ZCodeCaptchaManager } from '../src/providers/zcode/captcha/index.js'
+import type { CaptchaHandler } from '../src/providers/zcode/captcha/index.js'
 import { toAnthropicBody, anthropicEventToChunk, fromAnthropicResponse } from '../src/providers/zcode/anthropic.js'
 import { normalizeImportedCredential } from '../src/providers/zcode/auth.js'
 import type { Account, ChatRequest } from '../src/core/types.js'
@@ -91,9 +92,15 @@ describe('anthropic conversion', () => {
 })
 
 describe('zcode captcha gating', () => {
-  it('fails with NEEDS_CAPTCHA when no token has been submitted', async () => {
-    const provider = createZCodeProvider({ captcha: new ZCodeCaptchaManager(), fetcher: fetcherFor([]) })
-    await expect(provider.chat.chat(ctxWith({ jwt_token: 'j' }), REQ, account())).rejects.toMatchObject({ kind: 'NEEDS_CAPTCHA' })
+  it('sends the request without a token when none is cached (conditional captcha)', async () => {
+    const fetcher = fetcherFor([
+      { match: 'anthropic/v1/messages', json: { content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn' } },
+    ])
+    const provider = createZCodeProvider({ captcha: new ZCodeCaptchaManager(), fetcher })
+    const result = await provider.chat.chat(ctxWith({ jwt_token: 'j' }), REQ, account())
+    expect(result.content).toBe('ok')
+    const [, init] = fetcher.mock.calls[0] as [string, RequestInit]
+    expect((init.headers as Record<string, string>)['X-Aliyun-Captcha-Verify-Param']).toBeUndefined()
   })
 
   it('sends the verify param once a token is submitted', async () => {
@@ -128,9 +135,62 @@ describe('zcode captcha gating', () => {
     const captcha = new ZCodeCaptchaManager()
     captcha.submit('stale')
     const fetcher = fetcherFor([{ match: 'anthropic/v1/messages', status: 403, text: 'captcha verify failed' }])
-    const provider = createZCodeProvider({ captcha, fetcher, maxCaptchaRetries: 1 })
+    const provider = createZCodeProvider({ captcha, fetcher })
     await expect(provider.chat.chat(ctxWith({ jwt_token: 'jwt' }), REQ, account())).rejects.toMatchObject({ kind: 'NEEDS_CAPTCHA' })
     expect(captcha.isValid()).toBe(false)
+    // initial attempt only — the manual chain cannot produce a fresh token,
+    // so there is exactly one upstream call
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries once with a fresh token from the handler chain after a 403 challenge', async () => {
+    const captcha = new ZCodeCaptchaManager()
+    captcha.submit('stale')
+    let calls = 0
+    const fetcher = vi.fn(async () => {
+      calls += 1
+      if (calls === 1) {
+        return new Response('captcha verify failed', { status: 403, headers: { 'content-type': 'text/plain' } })
+      }
+      return new Response(JSON.stringify({ content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn' }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      })
+    }) as unknown as typeof fetch
+    const handler: CaptchaHandler = {
+      id: 'test-fresh',
+      handle: async () => ({ ok: true, verifyParam: 'fresh-token' }),
+    }
+    const provider = createZCodeProvider({ captcha, fetcher, captchaHandler: handler })
+    const result = await provider.chat.chat(ctxWith({ jwt_token: 'jwt' }), REQ, account())
+    expect(result.content).toBe('ok')
+    expect(calls).toBe(2)
+    const [, retryInit] = fetcher.mock.calls[1] as [string, RequestInit]
+    expect((retryInit.headers as Record<string, string>)['X-Aliyun-Captcha-Verify-Param']).toBe('fresh-token')
+  })
+
+  it('maps NEEDS_CAPTCHA when the in-body 3007 challenge cannot be resolved', async () => {
+    const captcha = new ZCodeCaptchaManager()
+    captcha.submit('stale')
+    const fetcher = fetcherFor([
+      { match: 'anthropic/v1/messages', status: 400, json: { code: 3007, msg: 'captcha required' } },
+    ])
+    const provider = createZCodeProvider({ captcha, fetcher })
+    await expect(provider.chat.chat(ctxWith({ jwt_token: 'jwt' }), REQ, account())).rejects.toMatchObject({ kind: 'NEEDS_CAPTCHA' })
+    expect(captcha.isValid()).toBe(false)
+  })
+
+  it('maps a stream captcha failure onto NEEDS_CAPTCHA (regression: raw error leak)', async () => {
+    const captcha = new ZCodeCaptchaManager()
+    captcha.submit('stale')
+    const fetcher = fetcherFor([{ match: 'anthropic/v1/messages', status: 403, text: 'captcha verify failed' }])
+    const provider = createZCodeProvider({ captcha, fetcher })
+    const chunks: unknown[] = []
+    await expect((async () => {
+      for await (const chunk of provider.chat.stream(ctxWith({ jwt_token: 'jwt' }), { ...REQ, stream: true }, account())) {
+        chunks.push(chunk)
+      }
+    })()).rejects.toMatchObject({ kind: 'NEEDS_CAPTCHA' })
+    expect(chunks).toHaveLength(0)
   })
 
   it('streams Anthropic SSE events as canonical chunks', async () => {
@@ -266,5 +326,63 @@ describe('zcode oauth poll — rate limit handling (regression)', () => {
     await expect(
       pollOAuth('f1', 'poll-tok', fetcher, undefined, { maxRetries: 1, sleep: async () => {} }),
     ).rejects.toBeInstanceOf(ZCodePollRateLimitedError)
+  })
+})
+
+describe('zcode oauth poll — transient failure semantics', () => {
+  it('treats 5xx and network errors as pending-style transients and recovers', async () => {
+    const waits: number[] = []
+    let calls = 0
+    const fetcher = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/oauth/cli/poll/')) {
+        calls += 1
+        if (calls === 1) return new Response('upstream exploded', { status: 502 })
+        if (calls === 2) throw new Error('socket hang up')
+        return new Response(JSON.stringify({ data: { status: 'ready', token: 'jwt-x' } }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        })
+      }
+      return new Response('{}', { status: 200 })
+    }) as unknown as typeof fetch
+    const { pollOAuth } = await import('../src/providers/zcode/auth.js')
+    const result = await pollOAuth('f1', 'tok', fetcher, undefined, { sleep: async (ms) => { waits.push(ms) } })
+    expect(result.ready).toBe(true)
+    expect(result.jwtToken).toBe('jwt-x')
+    expect(calls).toBe(3)
+    // exponential backoff: 1s then 2s (no retry-after header on a 502)
+    expect(waits).toEqual([1000, 2000])
+  })
+
+  it('surfaces a structured rate-limit error when 5xx/429 retries are exhausted', async () => {
+    let calls = 0
+    const fetcher = (async () => {
+      calls += 1
+      return new Response('nope', { status: 503 })
+    }) as unknown as typeof fetch
+    const { pollOAuth } = await import('../src/providers/zcode/auth.js')
+    await expect(
+      pollOAuth('f1', 'tok', fetcher, undefined, { maxRetries: 2, sleep: async () => {} }),
+    ).rejects.toThrow(/503/)
+    expect(calls).toBe(3)
+  })
+
+  it('treats a malformed 200 body as still-pending', async () => {
+    const fetcher = (async () => new Response('not json at all', {
+      status: 200, headers: { 'content-type': 'application/json' },
+    })) as unknown as typeof fetch
+    const { pollOAuth } = await import('../src/providers/zcode/auth.js')
+    await expect(pollOAuth('f1', 'tok', fetcher, undefined, { sleep: async () => {} })).resolves.toEqual({ ready: false })
+  })
+
+  it('startOAuth surfaces the server deadline and poll interval', async () => {
+    const fetcher = (async () => new Response(JSON.stringify({
+      data: { flow_id: 'f9', authorize_url: 'https://zcode.z.ai/authorize', expires_at: 1900000000, poll_interval_sec: 3 },
+    }), { status: 200, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch
+    const { startOAuth } = await import('../src/providers/zcode/auth.js')
+    const start = await startOAuth('poll-token', fetcher)
+    expect(start.flowId).toBe('f9')
+    expect(start.pollInterval).toBe(3)
+    expect(start.expiresAt).toBe(1_900_000_000_000)
   })
 })

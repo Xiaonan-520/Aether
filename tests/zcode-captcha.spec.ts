@@ -4,7 +4,7 @@
  * The manager never solves a captcha; these tests assert the lifecycle only.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { ZCodeCaptchaManager, ZCodeCaptchaUnavailableError } from '../src/providers/zcode/captcha.js'
+import { ZCodeCaptchaManager, ZCodeCaptchaUnavailableError } from '../src/providers/zcode/captcha/index.js'
 
 describe('ZCodeCaptchaManager', () => {
   it('reports needs_manual_action when no token is cached', () => {
