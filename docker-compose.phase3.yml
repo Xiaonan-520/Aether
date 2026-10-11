@@ -1,0 +1,78 @@
+# Phase 3 PoC stack: Gateway Core + Extension Manager + LobsterAI Extension.
+#
+# This file EXTENDS docker-compose.yml for the extension PoC deployment. It is
+# ISOLATED from the production compose project: run it with an explicit project
+# name, e.g.
+#
+#   docker compose -p gateway-extension-phase3 \
+#     -f docker-compose.yml -f docker-compose.extensions.yml \
+#     -f docker-compose.phase3.yml up -d
+#
+# Images are BUILT LOCALLY on the host (no registry push in the PoC):
+#   docker build -t local/mpag-phase3:1.0.0 .
+#   docker build -f src/extensions/lobsterai/Dockerfile -t local/gateway-extension-lobsterai:1.0.0 .
+#
+# Extension install happens at runtime through the Manager API:
+#   curl -H "Authorization: Bearer $GATEWAY_EXTENSION_MANAGER_TOKEN" \
+#     -H 'content-type: application/json' \
+#     http://manager:9100/api/extensions/install \
+#     -d "{\"manifest\": $(lobsterai-manifest), \"image\": {\"repo\": \"local/gateway-extension-lobsterai\", \"tag\": \"1.0.0\"}}"
+
+services:
+  gateway:
+    image: local/mpag-phase3:1.1.5
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: phase3-gateway
+    # !override replaces the base compose ports list (compose merges lists by
+    # default, which would double-bind 8080 against the production gateway)
+    ports: !override
+      - "18080:8080"
+    volumes:
+      - phase3-gateway-data:/data
+    environment:
+      # Core learns the manager's lifecycle API; Core NEVER gets docker.sock.
+      GATEWAY_EXTENSION_MANAGER_URL: http://phase3-extension-manager:9100
+      GATEWAY_EXTENSION_MANAGER_TOKEN: ${GATEWAY_EXTENSION_MANAGER_TOKEN:?set in .env}
+    networks:
+      - gw-ext-net
+
+  phase3-extension-manager:
+    image: local/mpag-phase3:1.1.5
+    container_name: phase3-extension-manager
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:9100/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    entrypoint: ["node", "dist/manager/main.js"]
+    environment:
+      GATEWAY_MANAGER_TOKEN: ${GATEWAY_EXTENSION_MANAGER_TOKEN:?set in .env}
+      # seals extension registration tokens at rest (manager-owned secret)
+      GATEWAY_SECRET: ${GATEWAY_SECRET:?set in .env}
+      # API accepts connections from other containers on gw-ext-net
+      # (still never published — no ports: section, RFC §19.5)
+      GW_MANAGER_ALLOW_REMOTE: "1"
+      GATEWAY_MANAGER_DB: /data/manager.db
+      GW_EXT_NETWORK: gw-ext-net
+      GW_EXT_RUNTIME: docker
+      HTTP_PORT: "9100"
+    volumes:
+      - phase3-manager-data:/data
+      # ── THE one and only docker socket mount in the entire stack ──
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - gw-ext-net
+    # no ports: section — manager is never internet-facing (RFC §19.5)
+    restart: unless-stopped
+    user: root # docker.sock access; the manager process itself drops to non-root in v2 hardening
+
+networks:
+  gw-ext-net:
+    name: gw-ext-net
+    driver: bridge
+
+volumes:
+  phase3-gateway-data:
+  phase3-manager-data:

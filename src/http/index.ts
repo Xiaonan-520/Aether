@@ -16,6 +16,7 @@ import { AccountPool } from '../core/pool/account-pool.js'
 import { Scheduler } from '../core/worker/scheduler.js'
 import { createGatewayApp } from './app.js'
 import { registerProviders } from '../providers/register.js'
+import { registerRemoteExtensions } from './remote-bootstrap.js'
 import { resolveCredentialJson } from '../service/context.js'
 import { registerSchedulerExecutors } from '../service/scheduler-executors.js'
 import type { ServiceContext } from '../service/context.js'
@@ -100,6 +101,33 @@ export async function main(): Promise<void> {
   scheduler.start()
 
   const { app, listen } = createGatewayApp(ctx)
+  // Phase 3 dual-track registration (RFC §17.2 step 5): extensions installed
+  // via the Extension Manager mount here as additional providers. Core learns
+  // only the manager's URL + token — it never touches Docker.
+  const managerUrl = process.env.GATEWAY_EXTENSION_MANAGER_URL
+  const managerToken = process.env.GATEWAY_EXTENSION_MANAGER_TOKEN
+  if (managerUrl && managerToken) {
+    // retry with backoff: the manager container may still be booting when the
+    // gateway starts (docker compose race); extensions must come up with it
+    const attempts = 5
+    for (let i = 1; i <= attempts; i++) {
+      try {
+        const registered = await registerRemoteExtensions(ctx, { managerUrl, managerToken })
+        console.log(`extension manager: ${registered} remote provider(s) registered from ${managerUrl}`)
+        break
+      } catch (err) {
+        // extension infrastructure must never take the gateway down; the
+        // in-process providers keep serving and events surface the failure
+        const reason = err instanceof Error ? err.message : String(err)
+        if (i === attempts) {
+          console.warn(`extension manager registration failed after ${attempts} attempts: ${reason}`)
+          break
+        }
+        console.warn(`extension manager registration attempt ${i}/${attempts} failed (${reason}); retrying in ${i * 2}s`)
+        await new Promise((resolve) => setTimeout(resolve, i * 2_000))
+      }
+    }
+  }
   const server = (await listen(config.httpPort, config.httpHost)) as { close: (cb: () => void) => void }
   console.log(`store backend: ${backend}; data dir: ${config.dataDir}`)
 

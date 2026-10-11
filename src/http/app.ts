@@ -151,6 +151,17 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
     const provider = c.req.query('provider')
     return c.json({ accounts: admin.listAccounts(provider) })
   })
+  // live model sync for a provider (same path the login flow uses; lets an
+  // operator reconcile the model table after an extension upgrade)
+  app.post('/api/providers/:id/sync-models', async (c) => {
+    const provider = c.req.param('id')
+    const accounts = ctx.store.listAccounts(provider).filter((s) => s.account.authenticated)
+    if (accounts.length === 0) {
+      throw new OpenAIApiError(409, 'invalid_request_error', `no authenticated account for provider "${provider}"`)
+    }
+    const synced = await login.syncModels(provider, accounts[0].account)
+    return c.json({ provider, models_synced: synced })
+  })
   app.get('/api/accounts/:id', (c) => c.json(admin.getAccount(c.req.param('id'))))
   app.post('/api/accounts', async (c) => {
     const body = await c.req.json<Record<string, unknown>>()

@@ -1,0 +1,75 @@
+# Extension Manager + Fake Extension infra (Phase 2).
+#
+# This file EXTENDS the existing docker-compose.yml (which stays the gateway
+# production definition and is untouched). On a Docker host:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.extensions.yml \
+#     -f docker-compose.fake-extension.yml up -d
+#
+# The manager is the ONLY service with the docker socket; it has NO published
+# ports (reachable only from the gateway network via Docker DNS). The fake
+# extension is created BY the manager at runtime — the service below exists
+# only to build its image and join the extension network.
+#
+# NOTE: egress from extension containers is NOT restricted (RFC v2 §12.2/§20.3:
+# `permissions.network` is a declaration, not enforcement — enforcement is
+# future v2 security work).
+
+services:
+  gateway:
+    networks:
+      - gw-front
+      - gw-ext-net
+    environment:
+      # Core learns the manager's lifecycle API; Core itself NEVER gets the
+      # docker socket. GW_EXTENSION_MANAGER_TOKEN is a second strong secret
+      # (rotate alongside the others in .env).
+      GATEWAY_EXTENSION_MANAGER_URL: http://gateway-extension-manager:9100
+      GATEWAY_EXTENSION_MANAGER_TOKEN: ${GATEWAY_EXTENSION_MANAGER_TOKEN:?set in .env}
+
+  gateway-extension-manager:
+    # Built from the gateway repo (same image as gateway, different entrypoint)
+    image: ghcr.io/xiaonan-520/multi-provider-ai-gateway:${GATEWAY_IMAGE_TAG:-latest}
+    container_name: ai-gateway-extension-manager
+    entrypoint: ["node", "dist/manager/main.js"]
+    environment:
+      GATEWAY_MANAGER_TOKEN: ${GATEWAY_EXTENSION_MANAGER_TOKEN:?set in .env}
+      # seals extension registration tokens at rest (manager-owned secret)
+      GATEWAY_SECRET: ${GATEWAY_SECRET:?set in .env}
+      # API must accept connections from other containers on gw-ext-net
+      # (still never published — no ports: section, RFC §19.5)
+      GW_MANAGER_ALLOW_REMOTE: "1"
+      GATEWAY_MANAGER_DB: /data/manager.db
+      GW_EXT_NETWORK: gw-ext-net
+      GW_EXT_RUNTIME: docker
+      HTTP_PORT: "9100"
+    volumes:
+      - manager-data:/data
+      # ── THE one and only docker socket mount in the entire stack ──
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - gw-ext-net
+    # no ports: section — manager is never internet-facing (RFC §19.5)
+    restart: unless-stopped
+    user: root # docker.sock access; the manager process itself drops to non-root in v2 hardening
+
+  gateway-extension-fake-build:
+    # Test-only service: builds the fake extension image so the manager can
+    # install it (install source: local image). Never runs in production.
+    image: local/gateway-extension-fake:1.0.0
+    build:
+      context: .
+      dockerfile: src/extensions/fake/Dockerfile
+    entrypoint: ["node", "-e", "setTimeout(() => {}, 2147483647)"]
+    networks:
+      - gw-ext-net
+    profiles: ["fake-extension"] # activated explicitly: --profile fake-extension
+
+networks:
+  gw-front:
+    driver: bridge
+  gw-ext-net:
+    driver: bridge
+
+volumes:
+  manager-data:
