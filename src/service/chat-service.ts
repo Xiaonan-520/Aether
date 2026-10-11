@@ -96,8 +96,12 @@ export class ChatService {
 
       try {
         const pctx = this.providerCtx(provider, account)
+        // adapters speak UPSTREAM model ids; the public (possibly namespaced)
+        // id is resolved to `entry.upstreamModel` here so no provider ever sees
+        // a `provider::model` string
+        const upstreamReq: ChatRequest = { ...req, model: entry.upstreamModel }
         if (req.stream) {
-          const stream = adapter.chat.stream(pctx, req, account, req.tools)
+          const stream = adapter.chat.stream(pctx, upstreamReq, account, req.tools)
           return {
             kind: 'stream',
             stream: this.wrappedStream(stream, provider, entry.upstreamModel, account),
@@ -106,7 +110,7 @@ export class ChatService {
             upstreamModel: entry.upstreamModel,
           }
         }
-        const result = await adapter.chat.chat(pctx, req, account, req.tools)
+        const result = await adapter.chat.chat(pctx, upstreamReq, account, req.tools)
         this.ctx.pool.reportResult(account)
         this.record(provider, account.id, 'chat.success', 'chat completed')
         return {

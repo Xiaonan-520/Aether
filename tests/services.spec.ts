@@ -259,6 +259,30 @@ describe('model service', () => {
     expect(h.models.list(true).find((m) => m.id === 'mock-model')).toBeUndefined()
   })
 
+  it('forwards the bare upstream model id to adapters (never provider::model)', async () => {
+    const h = setup()
+    h.ctx.store.upsertModels([{
+      modelId: 'mock::mock-model', provider: 'mock', upstreamModel: 'mock-model',
+      name: 'Mock Model', capabilities: { vision: false, toolCall: false, streaming: true },
+      enabled: true, priority: 10, metadataJson: null,
+    }])
+    const res = await h.chat.handle({ ...chatReq, model: 'mock::mock-model' })
+    expect(res.kind).toBe('result')
+    expect(h.provider.chatCalls[0]!.req.model).toBe('mock-model')
+  })
+
+  it('hides bare-id duplicates once a namespaced canonical row exists', () => {
+    const h = setup()
+    h.ctx.store.upsertModels([{
+      modelId: 'mock::mock-model', provider: 'mock', upstreamModel: 'mock-model',
+      name: 'Mock Model', capabilities: { vision: false, toolCall: false, streaming: true },
+      enabled: true, priority: 10, metadataJson: null,
+    }])
+    const ids = h.models.list().map((m) => m.id)
+    expect(ids).toContain('mock::mock-model')
+    expect(ids).not.toContain('mock-model')
+  })
+
   it('serializes the OpenAI list envelope', () => {
     const h = setup()
     const body = h.models.toOpenAiList(h.models.list())

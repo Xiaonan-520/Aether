@@ -94,6 +94,30 @@ describe('http — /v1/models', () => {
     expect(body.data[0]).toMatchObject({ id: 'mock-model', owned_by: 'mock', object: 'model' })
     expect(JSON.stringify(body)).not.toContain('credential')
   })
+
+  it('POST /api/providers/:id/sync-models re-syncs from the live adapter', async () => {
+    const { app, store, provider } = setup()
+    provider.models = [{
+      modelId: 'mock::fresh-model', provider: 'mock', upstreamModel: 'fresh-model',
+      name: 'Fresh', capabilities: { vision: false, toolCall: false, streaming: true },
+      enabled: true, priority: 10, metadataJson: null,
+    }]
+    const res = await app.request('/api/providers/mock/sync-models', {
+      method: 'POST', headers: { Authorization: 'Bearer admin-token-9' },
+    })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ provider: 'mock', models_synced: 1 })
+    expect(store.listModels().some((m) => m.modelId === 'mock::fresh-model')).toBe(true)
+  })
+
+  it('POST /api/providers/:id/sync-models → 409 without an authenticated account', async () => {
+    const { app, store } = setup()
+    for (const s of store.listAccounts('mock')) store.patchAccount(s.account.id, { authenticated: false })
+    const res = await app.request('/api/providers/mock/sync-models', {
+      method: 'POST', headers: { Authorization: 'Bearer admin-token-9' },
+    })
+    expect(res.status).toBe(409)
+  })
 })
 
 describe('http — /v1/chat/completions', () => {

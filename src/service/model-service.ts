@@ -26,9 +26,20 @@ export class ModelService {
   }
 
   list(onlyAvailable = false): PublicModel[] {
+    const entries = this.ctx.store.listModels()
+    // Namespaced rows (`provider::model`) supersede legacy bare-id rows for the
+    // same upstream model: when a distinct canonical row exists, the bare
+    // duplicate is kept for routing compatibility but hidden from the public
+    // list so a model is advertised exactly once.
+    const canonical = new Set(
+      entries
+        .filter((e) => e.modelId === `${e.provider}::${e.upstreamModel}`)
+        .map((e) => `${e.provider}::${e.upstreamModel}`),
+    )
     const seen = new Map<string, PublicModel>()
-    for (const entry of this.ctx.store.listModels()) {
+    for (const entry of entries) {
       if (!entry.enabled) continue
+      if (!entry.modelId.includes('::') && canonical.has(`${entry.provider}::${entry.upstreamModel}`)) continue
       const hasAccount = this.providerHasUsableAccount(entry.provider)
       const id = entry.modelId
       const existing = seen.get(id)
