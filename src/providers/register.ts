@@ -11,7 +11,6 @@ import { createCodeBuddyProvider } from './codebuddy/index.js'
 import { createWorkBuddyProvider } from './workbuddy/index.js'
 import { createWorkBuddyCnProvider } from './workbuddy-cn/index.js'
 import { createBuddyIntlProvider } from './buddy-intl/index.js'
-import { createLobsteraiProvider } from './lobsterai/index.js'
 import { createClineProvider } from './cline/index.js'
 import { createTraeProvider } from './trae/index.js'
 import { TRAE, TRAE_INTL } from './trae/product.js'
@@ -19,7 +18,6 @@ import { createCodeArtsProvider } from './codearts/index.js'
 import { createLoomyProvider } from './loomy/index.js'
 import { createQoderProvider } from './qoder/index.js'
 import { QODER, QODER_CN } from './qoder/product.js'
-import { createRaccoonProvider } from './raccoon/index.js'
 import { createZCodeProvider } from './zcode/index.js'
 import { ZCodeCaptchaManager } from './zcode/captcha/index.js'
 
@@ -42,7 +40,9 @@ export function registerProviders(
   registry.register(createWorkBuddyCnProvider(options.fetcher))
   registry.register(createCodeBuddyProvider(options.fetcher))
   registry.register(createBuddyIntlProvider(options.fetcher))
-  registry.register(createLobsteraiProvider(options.fetcher ? { fetcher: options.fetcher } : {}))
+  // lobsterai: migrated to the extension deployable (src/extensions/lobsterai,
+  // installed via the Extension Manager). No in-process adapter anymore —
+  // Phase 3 dual-track ends here for this provider.
   registry.register(createClineProvider(options.fetcher ? { fetcher: options.fetcher } : {}))
   registry.register(createZCodeProvider({ captcha, ...(options.fetcher ? { fetcher: options.fetcher } : {}) }))
   registry.register(createTraeProvider({ product: TRAE, ...(options.fetcher ? { fetcher: options.fetcher } : {}) }))
@@ -51,6 +51,7 @@ export function registerProviders(
   registry.register(createLoomyProvider(options.fetcher ? { fetcher: options.fetcher } : {}))
   registry.register(createQoderProvider({ product: QODER, ...(options.fetcher ? { fetcher: options.fetcher } : {}) }))
   registry.register(createQoderProvider({ product: QODER_CN, ...(options.fetcher ? { fetcher: options.fetcher } : {}) }))
-  registry.register(createRaccoonProvider(options.fetcher ? { fetcher: options.fetcher } : {}))
+  // raccoon: migrated to the extension deployable (src/extensions/raccoon,
+  // installed via the Extension Manager) — batch 1 of the provider migration.
   return { captcha }
 }
