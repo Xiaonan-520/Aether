@@ -93,6 +93,23 @@ async function handle(opts: ManagerApiOptions, req: IncomingMessage, res: Server
       send(res, 200, { extensionId: id, verb, ok: true })
       return
     }
+    const upgrade = /^\/api\/extensions\/([a-z0-9-]+)\/upgrade$/.exec(path)
+    if (req.method === 'POST' && upgrade) {
+      const [, id] = upgrade
+      const body = await readJson(req) as { manifest?: unknown; image?: { repo: string; tag: string; digest?: string } } | undefined
+      if (!body || typeof body !== 'object' || !('manifest' in body) || typeof body.manifest !== 'object') {
+        send(res, 400, { error: 'body must be { manifest: ExtensionManifest, image?: { repo, tag, digest? } }' })
+        return
+      }
+      const result = await opts.manager.upgrade(id, {
+        kind: 'manifest',
+        manifest: body.manifest as ImportableManifest,
+        image: body.image,
+      })
+      // token material never appears in any response
+      send(res, 200, result)
+      return
+    }
     if (req.method === 'GET' && /^\/api\/extensions\/([a-z0-9-]+)$/.test(path)) {
       const id = path.split('/')[3]
       const rec = opts.manager.get(id)

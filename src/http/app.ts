@@ -4,12 +4,18 @@
  * OpenAI error mapping only.
  */
 import { Hono } from 'hono'
+import type { Context } from 'hono'
 import { serve } from '@hono/node-server'
+import { serveStatic } from '@hono/node-server/serve-static'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import type { GatewayConfig } from '../config/index.js'
 import type { ServiceContext } from '../service/context.js'
 import { ChatService } from '../service/chat-service.js'
 import { ModelService } from '../service/model-service.js'
 import { AdminService } from '../service/admin-service.js'
+import { ConsoleService } from '../service/console-service.js'
+import { ExtensionService } from '../service/extension-service.js'
 import { LoginService } from '../service/login-service.js'
 import { ApiKeyService } from '../service/api-key-service.js'
 import { parseChatCompletionsRequest, OpenAIApiError } from '../protocol/openai/parse.js'
@@ -49,8 +55,20 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
   const chat = new ChatService(ctx)
   const models = new ModelService(ctx)
   const admin = new AdminService(ctx)
+  const consoleService = new ConsoleService(ctx)
   const login = new LoginService(ctx)
   const apiKeys = new ApiKeyService(ctx)
+
+  // Extension management (docs/EXTENSION_LIFECYCLE.md §5): only wired when the
+  // operator configured the Extension Manager endpoint. The manager token
+  // stays server-side; the browser only ever talks to these /api routes.
+  let extensions: ExtensionService | undefined
+  if (ctx.extensionManager) {
+    extensions = new ExtensionService({
+      endpoint: ctx.extensionManager,
+      ctx: () => ctx,
+    })
+  }
 
   const app = new Hono()
 
@@ -252,6 +270,29 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
     const jobType = c.req.query('type') || undefined
     return c.json({ jobs: admin.listJobs(jobType) })
   })
+
+  // -- console aggregation endpoints (admin token) --------------------------
+  app.get('/api/console/overview', (c) => c.json(consoleService.getOverview()))
+  app.get('/api/console/providers/:id/models', (c) =>
+    c.json({ models: consoleService.listProviderModels(c.req.param('id')) }),
+  )
+  app.get('/api/console/providers/:id/quotas', (c) =>
+    c.json({ quotas: consoleService.listProviderQuotas(c.req.param('id')) }),
+  )
+  app.get('/api/console/providers/:id/claims', (c) => {
+    const limit = Number(c.req.query('limit') ?? 50)
+    return c.json({ claims: consoleService.listProviderClaims(c.req.param('id'), limit) })
+  })
+
+  // -- manual maintenance triggers (admin token) ----------------------------
+  // Enqueue a scheduler job for one account. The scheduler owns retry,
+  // concurrency and idempotency; the console never bypasses it.
+  app.post('/api/accounts/:id/refresh', (c) => {
+    return c.json(admin.enqueueAccountJob(ctx, c.req.param('id'), 'token_refresh'))
+  })
+  app.post('/api/accounts/:id/quota-sync', (c) => {
+    return c.json(admin.enqueueAccountJob(ctx, c.req.param('id'), 'quota_sync'))
+  })
   app.get('/api/events', (c) => {
     const limit = Number(c.req.query('limit') ?? 50)
     return c.json({ events: admin.listEvents(limit) })
@@ -289,6 +330,82 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
       500,
     )
   })
+
+  // -- web console (static build; no auth on the HTML itself) ---------------
+  // Serves ../dist-console when `npm run console:build` has produced it. The
+  // SPA talks to /api/* with the operator's admin token entered in-app, so the
+  // HTML/JS are safe to serve unauthenticated — they carry no secrets. Hash
+  // routing means only /console/ itself needs to resolve; /api and /v1 keep
+  // their middleware regardless of path order.
+  if (existsSync(join(process.cwd(), 'dist-console', 'index.html'))) {
+    app.use(
+      '/console/*',
+      serveStatic({
+        root: 'dist-console',
+        rewriteRequestPath: (p) => p.replace(/^\/console/, '') || '/',
+      }),
+    )
+    app.get('/console', (c) => c.redirect('/console/'))
+  }
+
+  // -- extension lifecycle routes (admin token; docs/EXTENSION_LIFECYCLE.md §5)
+  // Inert unless GATEWAY_EXTENSION_MANAGER_URL/TOKEN are configured. Core
+  // injects the manager token server-side; there is no generic proxy route.
+  if (extensions) {
+    app.get('/api/console/extensions', async (c) =>
+      jsonOrError(c, { extensions: await extensions!.list() }))
+    app.get('/api/console/extensions/available', async (c) =>
+      jsonOrError(c, await extensions!.available()))
+    app.post('/api/console/extensions/install', async (c) =>
+      jsonOrError(c, await extensions!.install(await readBody(c) as { manifest: unknown; image?: { repo: string; tag: string; digest?: string } })))
+    app.post('/api/console/extensions/:id/upgrade', async (c) =>
+      jsonOrError(c, await extensions!.upgrade(c.req.param('id'), await readBody(c) as { manifest: unknown; image?: { repo: string; tag: string; digest?: string } })))
+    app.post('/api/console/extensions/:id/stop', async (c) =>
+      jsonOrError(c, await extensions!.stop(c.req.param('id'))))
+    app.post('/api/console/extensions/:id/restart', async (c) =>
+      jsonOrError(c, await extensions!.restart(c.req.param('id'))))
+    app.post('/api/console/extensions/:id/remove', async (c) =>
+      jsonOrError(c, await extensions!.remove(c.req.param('id'))))
+    app.post('/api/console/extensions/:id/reload', async (c) =>
+      jsonOrError(c, await extensions!.reload(c.req.param('id'))))
+    app.get('/api/console/extensions/:id', async (c) =>
+      jsonOrError(c, await extensions!.detail(c.req.param('id'))))
+    app.get('/api/console/extensions/:id/providers/:providerId/actions', async (c) =>
+      jsonOrError(c, {
+        actions: await extensions!.listActions(c.req.param('id'), c.req.param('providerId')),
+      }))
+    app.post('/api/console/extensions/:id/providers/:providerId/actions/:actionId', async (c) =>
+      jsonOrError(c, await extensions!.invokeAction(
+        c.req.param('id'),
+        c.req.param('providerId'),
+        c.req.param('actionId'),
+        await readBody(c) as { accountId?: string; payload?: unknown },
+      )))
+  }
+
+  async function readBody(c: { req: { json: () => Promise<unknown> } }): Promise<unknown> {
+    try {
+      return await c.req.json()
+    } catch {
+      return {}
+    }
+  }
+
+  async function jsonOrError(c: Context, promise: unknown): Promise<Response> {
+    try {
+      const body = await Promise.resolve(promise)
+      return c.json(body ?? { ok: true })
+    } catch (err) {
+      if (err instanceof OpenAIApiError) {
+        return c.json(
+          { error: { code: err.code ?? err.type, message: err.message } },
+          err.status as 400,
+        )
+      }
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: { code: 'internal_error', message } }, 500)
+    }
+  }
 
   function listen(port: number, host: string): Promise<unknown> {
     return new Promise((resolve, reject) => {

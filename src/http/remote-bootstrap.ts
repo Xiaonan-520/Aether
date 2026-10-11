@@ -47,7 +47,10 @@ export async function registerRemoteExtensions(
         endpoints: { baseUrl: pkg.endpointUrl, token: pkg.token },
       })
       for (const provider of providers) {
-        ctx.registry.register(provider)
+        // Extension upgrades rotate the extension token: an already-mounted
+        // provider must be replaced in place, not skipped (a skip would leave
+        // the old token live until the next gateway restart).
+        ctx.registry.replace(provider)
         count++
       }
       // persist provider rows (accounts.provider FK) and seed fallback models

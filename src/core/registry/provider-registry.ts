@@ -14,6 +14,18 @@ export class ProviderRegistry {
     this.providers.set(provider.id, provider)
   }
 
+  /**
+   * Replace an already-registered provider in place (extension upgrade rotates
+   * the extension token; reload must swap the mounted RemoteProvider without
+   * dropping the old one mid-flight). Returns true when a registration was
+   * replaced, false when the id was fresh.
+   */
+  replace(provider: Provider): boolean {
+    const existed = this.providers.has(provider.id)
+    this.providers.set(provider.id, provider)
+    return existed
+  }
+
   get(id: string): Provider | undefined {
     return this.providers.get(id)
   }

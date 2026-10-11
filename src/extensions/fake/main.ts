@@ -138,16 +138,23 @@ function ensureAccount(): FakeAccount {
 // ---------------------------------------------------------------------------
 
 function handleManifest(): unknown {
-  return state.behavior.corruptManifest
-    ? { ...structuredClone(FAKE_MANIFEST), extension: { ...FAKE_MANIFEST.extension, version: '9.9.9-corrupted' } }
-    : FAKE_MANIFEST
+  if (state.behavior.corruptManifest) {
+    return { ...structuredClone(FAKE_MANIFEST), extension: { ...FAKE_MANIFEST.extension, version: '9.9.9-corrupted' } }
+  }
+  // version override lets upgrade tests run a real blue-green handshake
+  // against the same entry (the served manifest must match the requested one)
+  const override = process.env.GW_FAKE_MANIFEST_VERSION
+  if (override && override !== FAKE_MANIFEST.extension.version) {
+    return { ...structuredClone(FAKE_MANIFEST), extension: { ...FAKE_MANIFEST.extension, version: override } }
+  }
+  return FAKE_MANIFEST
 }
 
 function handleHealth(): unknown {
   return {
     status: state.behavior.healthStatus,
     uptimeSec: Math.floor((Date.now() - state.startedAt) / 1000),
-    version: FAKE_MANIFEST.extension.version,
+    version: process.env.GW_FAKE_MANIFEST_VERSION ?? FAKE_MANIFEST.extension.version,
     accounts: { total: state.accounts.size, usable: state.behavior.healthStatus === 'healthy' ? state.accounts.size : 0 },
   }
 }

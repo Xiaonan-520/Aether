@@ -15,7 +15,7 @@ import Database from 'better-sqlite3'
 
 export type ExtensionStatus =
   | 'pending' | 'validating' | 'pulling' | 'starting' | 'health_check'
-  | 'conformance' | 'registering' | 'installed' | 'failed' | 'removing'
+  | 'conformance' | 'registering' | 'installed' | 'stopped' | 'failed' | 'removing'
 
 export interface InstallRecord {
   extensionId: string
@@ -30,6 +30,8 @@ export interface InstallRecord {
   manifestHash: string
   /** sha256 fingerprint of the injected extension token (never the token) */
   tokenFingerprint: string
+  /** provider ids declared by the installed manifest (extension → providers is 1:N) */
+  providerIds: string[]
   error: string | null
   installedAt: number
   updatedAt: number
@@ -68,14 +70,24 @@ export class ManagerStore {
         iv           BLOB NOT NULL,
         tag          BLOB NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS manifest_blobs (
+        extension_id  TEXT PRIMARY KEY,
+        manifest_json TEXT NOT NULL
+      );
     `)
     const row = this.db.prepare('SELECT version FROM schema_version').get() as { version: number } | undefined
     if (!row) this.db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(1)
+    // schema v2: provider ownership (1 extension : N providers, manifest-authoritative)
+    const cols = this.db.prepare("PRAGMA table_info(extensions)").all() as Array<{ name: string }>
+    if (!cols.some((c) => c.name === 'provider_ids')) {
+      this.db.exec("ALTER TABLE extensions ADD COLUMN provider_ids TEXT NOT NULL DEFAULT '[]'")
+      this.db.prepare('UPDATE schema_version SET version = 2').run()
+    }
   }
 
   /** Rollback helper: drops manager-owned tables only. */
   dropAll(): void {
-    this.db.exec('DROP TABLE IF EXISTS registration_tokens; DROP TABLE IF EXISTS extensions; DROP TABLE IF EXISTS schema_version;')
+    this.db.exec('DROP TABLE IF EXISTS registration_tokens; DROP TABLE IF EXISTS manifest_blobs; DROP TABLE IF EXISTS extensions; DROP TABLE IF EXISTS schema_version;')
   }
 
   putRegistrationToken(extensionId: string, blob: { ciphertext: Buffer; iv: Buffer; tag: Buffer }): void {
@@ -102,18 +114,18 @@ export class ManagerStore {
     this.db.prepare(`
       INSERT INTO extensions (
         extension_id, version, image_repo, image_tag, image_digest, container_id,
-        endpoint_url, status, manifest_hash, token_fingerprint, error, installed_at, updated_at
+        endpoint_url, status, manifest_hash, token_fingerprint, provider_ids, error, installed_at, updated_at
       ) VALUES (
         @extensionId, @version, @imageRepo, @imageTag, @imageDigest, @containerId,
-        @endpointUrl, @status, @manifestHash, @tokenFingerprint, @error, @installedAt, @updatedAt
+        @endpointUrl, @status, @manifestHash, @tokenFingerprint, @providerIds, @error, @installedAt, @updatedAt
       )
       ON CONFLICT(extension_id) DO UPDATE SET
         version=excluded.version, image_repo=excluded.image_repo, image_tag=excluded.image_tag,
         image_digest=excluded.image_digest, container_id=excluded.container_id,
         endpoint_url=excluded.endpoint_url, status=excluded.status,
         manifest_hash=excluded.manifest_hash, token_fingerprint=excluded.token_fingerprint,
-        error=excluded.error, updated_at=excluded.updated_at
-    `).run(rec)
+        provider_ids=excluded.provider_ids, error=excluded.error, updated_at=excluded.updated_at
+    `).run({ ...rec, providerIds: JSON.stringify(rec.providerIds ?? []) })
   }
 
   setStatus(extensionId: string, status: ExtensionStatus, error?: string): void {
@@ -133,6 +145,22 @@ export class ManagerStore {
 
   delete(extensionId: string): void {
     this.db.prepare('DELETE FROM extensions WHERE extension_id = ?').run(extensionId)
+    this.db.prepare('DELETE FROM manifest_blobs WHERE extension_id = ?').run(extensionId)
+  }
+
+  /** Stash the exact manifest that produced the current install (rollback source of truth). */
+  putManifest(extensionId: string, json: string): void {
+    this.db.prepare(`
+      INSERT INTO manifest_blobs (extension_id, manifest_json) VALUES (?, ?)
+      ON CONFLICT(extension_id) DO UPDATE SET manifest_json=excluded.manifest_json
+    `).run(extensionId, json)
+  }
+
+  getManifest(extensionId: string): string | undefined {
+    const row = this.db.prepare('SELECT manifest_json FROM manifest_blobs WHERE extension_id = ?').get(extensionId) as
+      | { manifest_json: string }
+      | undefined
+    return row?.manifest_json
   }
 
   close(): void {
@@ -142,6 +170,13 @@ export class ManagerStore {
 
 /** SQLite snake_case columns → camelCase InstallRecord. */
 function rowToRecord(row: Record<string, unknown>): InstallRecord {
+  let providerIds: string[] = []
+  try {
+    const parsed = JSON.parse((row.provider_ids as string | null) ?? '[]') as unknown
+    if (Array.isArray(parsed)) providerIds = parsed.filter((v): v is string => typeof v === 'string')
+  } catch {
+    // pre-v2 row or corrupted value: ownership unknown → empty
+  }
   return {
     extensionId: row.extension_id as string,
     version: row.version as string,
@@ -153,6 +188,7 @@ function rowToRecord(row: Record<string, unknown>): InstallRecord {
     status: row.status as InstallRecord['status'],
     manifestHash: row.manifest_hash as string,
     tokenFingerprint: row.token_fingerprint as string,
+    providerIds,
     error: (row.error as string | null) ?? null,
     installedAt: row.installed_at as number,
     updatedAt: row.updated_at as number,

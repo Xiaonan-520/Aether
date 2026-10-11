@@ -79,17 +79,6 @@ export async function main(): Promise<void> {
     },
   })
 
-  const ctx: ServiceContext = {
-    config,
-    store,
-    cipher,
-    registry,
-    router: new ModelRouter(registry, () => store.listModels()),
-    pool,
-    captcha,
-    now: () => Date.now(),
-  }
-
   const scheduler = new Scheduler({ store, registry })
   registerSchedulerExecutors(scheduler, {
     store,
@@ -98,14 +87,34 @@ export async function main(): Promise<void> {
     persistCredential: (account, credential) =>
       store.setCredential(account.credentialKey, ctx.cipher.encryptJson(credential)),
   })
+
+  const ctx: ServiceContext = {
+    config,
+    store,
+    cipher,
+    registry,
+    router: new ModelRouter(registry, () => store.listModels()),
+    pool,
+    captcha,
+    scheduler,
+    now: () => Date.now(),
+  }
   scheduler.start()
+
+  // Extension management must be wired BEFORE createGatewayApp: the console
+  // lifecycle routes are registered at app-build time when ctx.extensionManager
+  // is set (docs/EXTENSION_LIFECYCLE.md §5).
+  const managerUrl = process.env.GATEWAY_EXTENSION_MANAGER_URL
+  const managerToken = process.env.GATEWAY_EXTENSION_MANAGER_TOKEN
+  if (managerUrl && managerToken) {
+    ctx.extensionManager = { managerUrl, managerToken }
+  }
 
   const { app, listen } = createGatewayApp(ctx)
   // Phase 3 dual-track registration (RFC §17.2 step 5): extensions installed
   // via the Extension Manager mount here as additional providers. Core learns
-  // only the manager's URL + token — it never touches Docker.
-  const managerUrl = process.env.GATEWAY_EXTENSION_MANAGER_URL
-  const managerToken = process.env.GATEWAY_EXTENSION_MANAGER_TOKEN
+  // only the manager's URL + token — it never touches Docker. The same
+  // endpoint also powers the extension lifecycle management routes.
   if (managerUrl && managerToken) {
     // retry with backoff: the manager container may still be booting when the
     // gateway starts (docker compose race); extensions must come up with it

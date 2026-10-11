@@ -23,6 +23,8 @@ interface ProcRecord {
   child: ChildProcess
   port: number
   workdir: string
+  /** re-spawns the entry on the SAME port (start-after-stop parity with docker) */
+  respawn: () => ChildProcess
 }
 
 /** The image the local backend understands: local/fake-extension:<tag>. */
@@ -31,6 +33,8 @@ export interface LocalImageDescriptor {
   entryUrl: string
   /** named export to invoke: (port, env) => Promise<void> | http server */
   exportName?: string
+  /** image-baked env (mirrors version/labels baked into a real image) */
+  env?: Record<string, string>
 }
 
 export class LocalProcessRuntime implements ContainerRuntime {
@@ -80,7 +84,7 @@ export class LocalProcessRuntime implements ContainerRuntime {
     writeFileSync(stateFile, JSON.stringify({ env: spec.env, port }))
 
     // boot the entry on the chosen port with the sanitized env
-    const child = spawn(process.execPath, [
+    const spawnArgs = [
       '--import', 'tsx',
       '-e', `
         import { run } from ${JSON.stringify(descriptor.entryUrl)}
@@ -88,8 +92,10 @@ export class LocalProcessRuntime implements ContainerRuntime {
         await run(state.port, state.env)
       `,
       '--', String(port),
-    ], {
-      env: { ...process.env, ...spec.env, PORT: String(port), GW_STATE_FILE: stateFile },
+    ]
+    const spawnEnv = { ...process.env, ...spec.env, ...(descriptor.env ?? {}), PORT: String(port), GW_STATE_FILE: stateFile }
+    const child = spawn(process.execPath, spawnArgs, {
+      env: spawnEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,
     })
@@ -98,7 +104,22 @@ export class LocalProcessRuntime implements ContainerRuntime {
       if (process.env.GW_EXTENSION_DEBUG) process.stderr.write(`[ext:${spec.name}] ${d}`)
     })
 
-    this.procs.set(spec.name, { child, port, workdir })
+    this.procs.set(spec.name, {
+      child,
+      port,
+      workdir,
+      respawn: () => {
+        const next = spawn(process.execPath, spawnArgs, {
+          env: spawnEnv,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          detached: false,
+        })
+        next.stderr?.on('data', (d: Buffer) => {
+          if (process.env.GW_EXTENSION_DEBUG) process.stderr.write(`[ext:${spec.name}] ${d}`)
+        })
+        return next
+      },
+    })
     return { containerId: `local-${spec.name}`, endpointUrl: `http://127.0.0.1:${port}` }
   }
 
@@ -106,6 +127,11 @@ export class LocalProcessRuntime implements ContainerRuntime {
     const name = containerId.replace(/^local-/, '')
     const rec = this.procs.get(name)
     if (!rec) throw new Error(`unknown container: ${containerId}`)
+    if (rec.child.killed || rec.child.exitCode !== null) {
+      // parity with `docker start`: a stopped container starts again on the
+      // same endpoint (restart verb depends on this)
+      rec.child = rec.respawn()
+    }
     await waitUntilListening(rec.port, 15_000)
   }
 
@@ -114,7 +140,7 @@ export class LocalProcessRuntime implements ContainerRuntime {
     const rec = this.procs.get(name)
     if (!rec) return
     if (!rec.child.killed) rec.child.kill('SIGTERM')
-    this.procs.delete(name)
+    // record STAYS so start() can respawn (docker stop/start parity)
   }
 
   async remove(containerId: string): Promise<void> {

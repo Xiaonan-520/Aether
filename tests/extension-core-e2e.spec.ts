@@ -235,6 +235,34 @@ describe('Phase 3 local E2E — Core → Manager → LobsterAI Extension', () =>
     )).rejects.toThrow()
   })
 
+  it('Core bootstrap re-mount: replaces an already-registered provider (upgrade token rotation)', async () => {
+    const coreStore = new MemoryStore()
+    const { ProviderRegistry: Reg } = await import('../src/core/registry/provider-registry.js')
+    const registry = new Reg()
+    const apiServer = await startManagerApi({ manager, token: 'mgr-token-e2e', port: 0 })
+    try {
+    const apiPort = (apiServer.address() as { port: number }).port
+    const first = await registerRemoteExtensions(
+      { store: coreStore, registry },
+      { managerUrl: `http://127.0.0.1:${apiPort}`, managerToken: 'mgr-token-e2e' },
+    )
+    expect(first).toBe(1)
+    const before = registry.get('lobsterai')
+    expect(before).toBeDefined()
+    // second pass = post-upgrade reload: same id, fresh registration package
+    const second = await registerRemoteExtensions(
+      { store: coreStore, registry },
+      { managerUrl: `http://127.0.0.1:${apiPort}`, managerToken: 'mgr-token-e2e' },
+    )
+    expect(second).toBe(1)
+    const after = registry.get('lobsterai')
+    expect(after).toBeDefined()
+    expect(after).not.toBe(before) // new RemoteProvider instance carrying the rotated token
+    } finally {
+      apiServer.close()
+    }
+  })
+
   it('streaming: RemoteProvider.stream yields upstream content through the extension', async () => {
     const accountId = await provisionActiveAccount()
     const chunks: Array<{ text?: string }> = []

@@ -74,6 +74,8 @@ export class ExtensionManager {
   private readonly issueToken: () => string
   /** seals registration tokens at rest; null = registration disabled */
   private readonly registrationCipher: CredentialCipher | null
+  /** per-extension mutex: at most one lifecycle mutation at a time (D3) */
+  private readonly locks = new Map<string, string>()
 
   constructor(opts: ManagerOptions) {
     this.store = opts.store
@@ -87,6 +89,20 @@ export class ExtensionManager {
       : null
   }
 
+  /** Serialized per extension: install/upgrade/stop/restart/remove are mutually exclusive. */
+  private acquire(extensionId: string, verb: string): () => void {
+    const current = this.locks.get(extensionId)
+    if (current) throw new Error(`extension "${extensionId}" is busy: ${current} in progress`)
+    this.locks.set(extensionId, verb)
+    let released = false
+    return () => {
+      if (!released) {
+        this.locks.delete(extensionId)
+        released = true
+      }
+    }
+  }
+
   // -------------------------------------------------------------------------
   // install
   // -------------------------------------------------------------------------
@@ -97,8 +113,10 @@ export class ExtensionManager {
     }
     const manifest = source.manifest
     const extensionId = manifest.extension.id
+    const release = this.acquire(extensionId, 'install')
 
     if (this.store.get(extensionId)) {
+      release()
       throw new Error(`extension "${extensionId}" is already installed`)
     }
     const now = Date.now()
@@ -114,6 +132,7 @@ export class ExtensionManager {
       status: 'pending',
       manifestHash: `sha256:${sha256Json(manifest)}`,
       tokenFingerprint: sha256Hex(extensionToken),
+      providerIds: manifest.providers.map((p) => p.id),
       error: null,
       installedAt: now,
       updatedAt: now,
@@ -121,88 +140,28 @@ export class ExtensionManager {
     this.store.upsert(record)
 
     try {
-      // 1. validate manifest (shape + security constraints)
-      this.setStatus(extensionId, 'validating')
-      const validation = validateManifest(manifest)
-      if (!validation.ok) {
-        const detail = [...validation.errors, ...validation.violations]
-          .map((v) => `${v.path}: ${v.message}`).join('; ')
-        throw new Error(`manifest rejected: ${detail}`)
-      }
-
-      // 2. image policy + pull (pinned digest recorded)
-      this.setStatus(extensionId, 'pulling')
-      const image: ImageRef = {
+      const result = await this.runInstallPipeline(extensionId, manifest, {
         repo: record.imageRepo,
         tag: record.imageTag,
         digest: source.image?.digest,
-      }
-      const { digest } = await this.runtime.pullImage(image)
-      record.imageDigest = digest
-
-      // 3. manifest → sanitized runtime spec (the conversion boundary)
-      const spec = sanitizeRuntime({
-        manifest,
-        image: { ...image, digest },
-        injectedEnv: {
-          GATEWAY_EXTENSION_TOKEN: extensionToken,
-          GATEWAY_EXTENSION_ID: extensionId,
-        },
-        limits: { network: this.network, operatorEnv: this.operatorEnv },
       })
-
-      // 4. create + start
-      this.setStatus(extensionId, 'starting')
-      const handle = await this.runtime.createContainer(spec)
-      record.containerId = handle.containerId
-      record.endpointUrl = handle.endpointUrl
-      await this.runtime.start(handle.containerId)
-
-      // 5. wait for health
-      this.setStatus(extensionId, 'health_check')
-      await this.waitHealthy(handle.endpointUrl)
-
-      // 6. manifest handshake — served manifest must match the installed one
-      const servedManifest = await this.fetchServedManifest(handle.endpointUrl, extensionToken)
-      if (sha256Json(servedManifest) !== record.manifestHash.replace(/^sha256:/, '')) {
-        throw new Error('manifest mismatch: served /manifest differs from installed manifest')
-      }
-
-      // 7. conformance gate — failure MUST prevent registration
-      this.setStatus(extensionId, 'conformance')
-      const suite = await runConformanceSuite(
-        servedManifest,
-        new AuthedTransport(handle.endpointUrl, extensionToken),
-      )
-      if (!suite.pass) {
-        const failed = suite.domains.filter((d) => !d.pass)
-          .map((d) => `${d.domain}: ${d.checks.filter((c) => !c.pass).map((c) => c.id).join(',')}`)
-          .join('; ')
-        throw new Error(`conformance gate failed: ${failed}`)
-      }
-
-      // 8. persist final record (registration into Core happens via
-      //    listRegisterable() + the registration package on the Core side)
-      this.setStatus(extensionId, 'installed')
-      record.status = 'installed'
-      this.store.upsert(record)
-      this.sealRegistrationToken(extensionId, extensionToken)
-      return {
-        extensionId,
-        status: 'installed',
-        endpointUrl: handle.endpointUrl,
-        providers: manifest.providers.map((p) => ({ id: p.id, displayName: p.displayName })),
-      }
+      this.store.putManifest(extensionId, JSON.stringify(manifest))
+      release()
+      return result
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       // cleanup: no half-installed state. Cleanup failures are recorded.
-      await this.cleanup(extensionId, record.containerId).catch((cleanupErr) => {
+      await this.cleanup(extensionId, this.store.get(extensionId)?.containerId ?? null).catch((cleanupErr) => {
         console.error(`[manager] cleanup failed for ${extensionId}: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}`)
       })
       this.setStatus(extensionId, 'failed', message)
-      record.error = message
-      record.status = 'failed'
-      this.store.upsert(record)
+      const failed = this.store.get(extensionId)
+      if (failed) {
+        failed.error = message
+        failed.status = 'failed'
+        this.store.upsert(failed)
+      }
+      release()
       throw err instanceof RuntimePolicyError ? err : new Error(`install failed: ${message}`)
     }
   }
@@ -212,46 +171,135 @@ export class ExtensionManager {
   // -------------------------------------------------------------------------
 
   async stop(extensionId: string): Promise<void> {
-    const rec = this.mustGet(extensionId)
-    if (!rec.containerId) throw new Error(`extension "${extensionId}" has no container`)
+    const release = this.acquire(extensionId, 'stop')
     try {
+      const rec = this.mustGet(extensionId)
+      if (!rec.containerId) throw new Error(`extension "${extensionId}" has no container`)
       await this.runtime.stop(rec.containerId)
-      this.setStatus(extensionId, 'failed', 'stopped by operator')
-    } catch (err) {
-      const message = `stop failed: ${err instanceof Error ? err.message : String(err)}`
-      this.setStatus(extensionId, rec.status, message)
-      throw new Error(message)
+      // 'stopped' is an operator action, not a failure (D2 in docs/EXTENSION_LIFECYCLE.md)
+      this.setStatus(extensionId, 'stopped', undefined)
+    } finally {
+      release()
     }
   }
 
   async restart(extensionId: string): Promise<void> {
-    const rec = this.mustGet(extensionId)
-    if (!rec.containerId) throw new Error(`extension "${extensionId}" has no container`)
-    await this.runtime.stop(rec.containerId)
-    await this.runtime.start(rec.containerId)
-    await this.waitHealthy(rec.endpointUrl!)
-    this.setStatus(extensionId, 'installed')
+    const release = this.acquire(extensionId, 'restart')
+    try {
+      const rec = this.mustGet(extensionId)
+      if (!rec.containerId) throw new Error(`extension "${extensionId}" has no container`)
+      await this.runtime.stop(rec.containerId)
+      await this.runtime.start(rec.containerId)
+      await this.waitHealthy(rec.endpointUrl!)
+      this.setStatus(extensionId, 'installed', undefined)
+    } finally {
+      release()
+    }
   }
 
   async remove(extensionId: string): Promise<void> {
-    const rec = this.mustGet(extensionId)
-    this.setStatus(extensionId, 'removing')
+    const release = this.acquire(extensionId, 'remove')
     try {
+      const rec = this.mustGet(extensionId)
+      this.setStatus(extensionId, 'removing')
       if (rec.containerId) {
         await this.runtime.stop(rec.containerId)
         await this.runtime.remove(rec.containerId)
       }
+      // Named volume survives by design (D8): credentials persist for a
+      // future re-install. Data deletion has no API on purpose.
       this.store.delete(extensionId)
       this.store.deleteRegistrationToken(extensionId)
     } catch (err) {
       const message = `remove failed: ${err instanceof Error ? err.message : String(err)}`
-      this.setStatus(extensionId, rec.status, message)
+      const rec = this.store.get(extensionId)
+      if (rec) this.setStatus(extensionId, rec.status, message)
       throw new Error(message)
+    } finally {
+      release()
     }
   }
 
   list(): InstallRecord[] {
     return this.store.list()
+  }
+
+  /**
+   * Upgrade in place (D4, docs/EXTENSION_LIFECYCLE.md): pull the new image
+   * FIRST (old container keeps serving), then stop+remove the old container,
+   * then run the full install pipeline with the new manifest + a fresh
+   * extension token. The named volume is never touched, so credentials and
+   * extension-owned data survive. Same version → idempotent no-op.
+   *
+   * Failure recovery: once the old container has been removed, any failure
+   * rolls BACK to the old image+manifest (fresh token); if even the rollback
+   * fails, the record lands in 'failed' with the data volume intact and the
+   * operator can remove + re-install (credentials persist).
+   */
+  async upgrade(extensionId: string, source: InstallSource): Promise<InstallResult> {
+    if (source.kind !== 'manifest') {
+      throw new Error('only pre-fetched manifest upgrades are supported in Phase 2')
+    }
+    const manifest = source.manifest
+    if (manifest.extension.id !== extensionId) {
+      throw new Error(`manifest id "${manifest.extension.id}" does not match installed extension "${extensionId}"`)
+    }
+    const release = this.acquire(extensionId, 'upgrade')
+    try {
+      const current = this.mustGet(extensionId)
+      if (current.status === 'removing') throw new Error(`extension "${extensionId}" is being removed`)
+      if (manifest.extension.version === current.version && !source.image) {
+        // idempotent no-op: nothing to do, current record already authoritative
+        return {
+          extensionId,
+          status: current.status,
+          endpointUrl: current.endpointUrl ?? '',
+          providers: manifest.providers.map((p) => ({ id: p.id, displayName: p.displayName })),
+        }
+      }
+
+      // 1. resolve the new image BEFORE touching the running container
+      const image: ImageRef = {
+        repo: source.image?.repo ?? current.imageRepo,
+        tag: source.image?.tag ?? manifest.extension.version,
+        digest: source.image?.digest,
+      }
+      this.setStatus(extensionId, 'pulling')
+      const { digest } = await this.runtime.pullImage(image)
+
+      // 2. stop + remove the old container (the named volume survives)
+      if (current.containerId) {
+        await this.runtime.stop(current.containerId).catch(() => undefined)
+        await this.runtime.remove(current.containerId)
+      }
+
+      // 3. full install pipeline with the new manifest + fresh token
+      try {
+        const result = await this.runInstallPipeline(extensionId, manifest, { ...image, digest })
+        release()
+        return result
+      } catch (err) {
+        // 4. rollback to the previous image+manifest so the old version keeps
+        //    serving; the failed upgrade attempt is recorded in error.
+        const upgradeError = err instanceof Error ? err.message : String(err)
+        try {
+          const oldManifest = await this.fetchPreviousManifest(current, extensionId)
+          await this.runInstallPipeline(extensionId, oldManifest, {
+            repo: current.imageRepo,
+            tag: current.imageTag,
+            digest: current.imageDigest ?? undefined,
+          })
+          this.setStatus(extensionId, 'installed', `upgrade rolled back: ${upgradeError}`)
+        } catch (rollbackErr) {
+          const message = `upgrade failed AND rollback failed: upgrade=${upgradeError}; rollback=${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`
+          this.setStatus(extensionId, 'failed', message)
+          throw new Error(message)
+        }
+        throw new Error(`upgrade failed (rolled back to ${current.version}): ${upgradeError}`)
+      }
+    } finally {
+      release()
+    }
   }
 
   /**
@@ -302,6 +350,123 @@ export class ExtensionManager {
 
   private setStatus(extensionId: string, status: ExtensionStatus, error?: string): void {
     this.store.setStatus(extensionId, status, error)
+  }
+
+  /**
+   * The full install pipeline shared by install / upgrade / rollback. Creates
+   * a FRESH token each run (old tokens die with the old container), walks the
+   * observable status states, enforces the manifest handshake + conformance
+   * gate, and persists the final record. Throws on any failure (caller owns
+   * cleanup/rollback).
+   */
+  private async runInstallPipeline(
+    extensionId: string,
+    manifest: ExtensionManifest,
+    image: ImageRef,
+  ): Promise<InstallResult> {
+    const extensionToken = this.issueToken()
+    const now = Date.now()
+    const previous = this.store.get(extensionId)
+    const record: InstallRecord = {
+      extensionId,
+      version: manifest.extension.version,
+      imageRepo: image.repo,
+      imageTag: image.tag,
+      imageDigest: image.digest ?? null,
+      containerId: null,
+      endpointUrl: null,
+      status: 'pending',
+      manifestHash: `sha256:${sha256Json(manifest)}`,
+      tokenFingerprint: sha256Hex(extensionToken),
+      providerIds: manifest.providers.map((p) => p.id),
+      error: null,
+      installedAt: previous?.installedAt ?? now,
+      updatedAt: now,
+    }
+    this.store.upsert(record)
+
+    // 1. validate manifest (shape + security constraints)
+    this.setStatus(extensionId, 'validating')
+    const validation = validateManifest(manifest)
+    if (!validation.ok) {
+      const detail = [...validation.errors, ...validation.violations]
+        .map((v) => `${v.path}: ${v.message}`).join('; ')
+      throw new Error(`manifest rejected: ${detail}`)
+    }
+
+    // 2. image pull (pinned digest recorded)
+    this.setStatus(extensionId, 'pulling')
+    const { digest } = await this.runtime.pullImage(image)
+    record.imageDigest = digest
+
+    // 3. manifest → sanitized runtime spec (the conversion boundary)
+    const spec = sanitizeRuntime({
+      manifest,
+      image: { ...image, digest },
+      injectedEnv: {
+        GATEWAY_EXTENSION_TOKEN: extensionToken,
+        GATEWAY_EXTENSION_ID: extensionId,
+      },
+      limits: { network: this.network, operatorEnv: this.operatorEnv },
+    })
+
+    // 4. create + start
+    this.setStatus(extensionId, 'starting')
+    const handle = await this.runtime.createContainer(spec)
+    record.containerId = handle.containerId
+    record.endpointUrl = handle.endpointUrl
+    await this.runtime.start(handle.containerId)
+
+    // 5. wait for health
+    this.setStatus(extensionId, 'health_check')
+    await this.waitHealthy(handle.endpointUrl)
+
+    // 6. manifest handshake — served manifest must match the installed one
+    const servedManifest = await this.fetchServedManifest(handle.endpointUrl, extensionToken)
+    if (sha256Json(servedManifest) !== record.manifestHash.replace(/^sha256:/, '')) {
+      throw new Error('manifest mismatch: served /manifest differs from installed manifest')
+    }
+
+    // 7. conformance gate — failure MUST prevent registration
+    this.setStatus(extensionId, 'conformance')
+    const suite = await runConformanceSuite(
+      servedManifest,
+      new AuthedTransport(handle.endpointUrl, extensionToken),
+    )
+    if (!suite.pass) {
+      const failed = suite.domains.filter((d) => !d.pass)
+        .map((d) => `${d.domain}: ${d.checks.filter((c) => !c.pass).map((c) => c.id).join(',')}`)
+        .join('; ')
+      throw new Error(`conformance gate failed: ${failed}`)
+    }
+
+    // 8. persist final record (registration into Core happens via
+    //    listRegisterable() + the registration package on the Core side)
+    this.setStatus(extensionId, 'installed')
+    record.status = 'installed'
+    this.store.upsert(record)
+    this.store.putManifest(extensionId, JSON.stringify(manifest))
+    this.sealRegistrationToken(extensionId, extensionToken)
+    return {
+      extensionId,
+      status: 'installed',
+      endpointUrl: handle.endpointUrl,
+      providers: manifest.providers.map((p) => ({ id: p.id, displayName: p.displayName })),
+    }
+  }
+
+  /**
+   * Rollback source of truth: the exact manifest that produced the current
+   * install (stashed in manifest_blobs). A missing blob is a hard error —
+   * silently rolling forward with a guessed manifest would be worse.
+   */
+  private fetchPreviousManifest(current: InstallRecord, extensionId: string): ExtensionManifest {
+    const json = this.store.getManifest(extensionId)
+    if (!json) {
+      throw new Error(`no stashed manifest for "${extensionId}"; cannot roll back safely`)
+    }
+    void current
+    return JSON.parse(json) as ExtensionManifest
   }
 
   private async waitHealthy(endpointUrl: string, token?: string): Promise<void> {
