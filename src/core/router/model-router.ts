@@ -2,6 +2,23 @@ import type { ModelEntry } from '../types.js'
 import type { ProviderRegistry } from '../registry/provider-registry.js'
 
 /**
+ * A bare model id matched several enabled providers. Never surfaced raw:
+ * onError maps this to a 400 listing the namespaced candidates.
+ */
+export class AmbiguousModelError extends Error {
+  readonly candidates: string[]
+
+  constructor(modelName: string, candidates: string[]) {
+    super(
+      `model "${modelName}" is ambiguous across providers (${candidates.join(', ')}); ` +
+        'retry with a namespaced model id like "provider::model"',
+    )
+    this.name = 'AmbiguousModelError'
+    this.candidates = candidates
+  }
+}
+
+/**
  * ModelRouter maps an OpenAI model string to a concrete provider + upstream
  * model. Supports same-named models across providers (e.g. `::provider` prefix)
  * and priority-based default selection.
@@ -41,14 +58,35 @@ export class ModelRouter {
       return renamed ? entryWithProvider(renamed) : null
     }
 
-    // no prefix: prefer enabled providers that have a usable account,
-    // then fall back to highest-priority entry across all providers
-    if (onlyAvailable) {
-      const avail = entries.find((e) => providerHasAccount(e.provider))
-      if (avail) return entryWithProvider(avail)
+    // no prefix: only route when the model maps to exactly one provider.
+    // A provider "claims" the bare name when it published that exact id or a
+    // canonical `provider::name` row for the same upstream — a provider whose
+    // public id differs entirely (e.g. `p2::other` upstream `name`) never
+    // claims `name`, so legacy same-upstream duplicates don't create false
+    // ambiguity. Rows from one provider count once; a silent priority pick
+    // across providers would hide the choice from the client.
+    const claimed = entries.filter(
+      (e) => e.modelId === modelName || e.modelId === `${e.provider}::${modelName}`,
+    )
+    const byProvider = new Map<string, ModelEntry[]>()
+    for (const e of claimed) {
+      const rows = byProvider.get(e.provider)
+      if (rows) rows.push(e)
+      else byProvider.set(e.provider, [e])
     }
-    const best = [...entries].sort((a, b) => b.priority - a.priority)[0]
-    return best ? entryWithProvider(best) : null
+    if (onlyAvailable) {
+      for (const provider of [...byProvider.keys()]) {
+        if (!providerHasAccount(provider)) byProvider.delete(provider)
+      }
+    }
+    if (byProvider.size > 1) {
+      const candidates = [...byProvider.keys()].map((provider) => `${provider}::${modelName}`).sort()
+      throw new AmbiguousModelError(modelName, candidates)
+    }
+    const rows = byProvider.values().next().value
+    if (!rows) return null
+    const best = [...rows].sort((a, b) => b.priority - a.priority)[0]
+    return entryWithProvider(best)
   }
 }
 

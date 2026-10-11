@@ -243,3 +243,73 @@ describe('conformance suite skeleton (RFC §22.1, D8)', () => {
     expect(result.domains.find((d) => d.domain === 'health')!.pass).toBe(false)
   })
 })
+
+// ---------------------------------------------------------------------------
+// RemoteProvider claim / quota ops (Phase 3 credit chain, Core side)
+// ---------------------------------------------------------------------------
+
+describe('RemoteProvider ops — claim and quota over the extension protocol', () => {
+  const account = (id: string) => ({
+    id, provider: 'workbuddy-cn', displayName: id, status: 'active' as const, enabled: true,
+    authenticated: true, tokenExpiryAt: null, refreshable: true, credentialKey: 'CRED_X',
+    failureCount: 0, lastSuccessAt: null, lastFailureAt: null, lastError: null, cooldownUntil: null,
+    modelRateLimits: {}, quotaJson: null, lastQuotaAt: null, lastCreditClaimAt: null,
+    quotaManualRequired: false, providerMetadataJson: null, createdAt: 0, updatedAt: 0,
+  })
+
+  it('claimCredits posts to the well-known claim path and passes the outcome through', async () => {
+    const routes = stubFetch(new Map<string, (init?: RequestInit) => Response>([
+      [`${endpoints.baseUrl}/v1/accounts/acc-9/claim`, () => json({ outcome: { kind: 'success', credit: 5, message: '+5 credit' } })],
+    ]))
+    const [provider] = buildRemoteProviders({
+      manifest: structuredClone(buddyManifestFixture),
+      endpoints,
+      fetch: routes,
+    })
+    const outcome = await provider.ops.claimCredits!(undefined as never, account('acc-9'))
+    expect(outcome).toMatchObject({ kind: 'success', credit: 5 })
+  })
+
+  it('claim error kinds map verbatim (already_claimed / not_available / needs_auth)', async () => {
+    for (const kind of ['already_claimed', 'not_available', 'needs_auth']) {
+      const routes = stubFetch(new Map<string, (init?: RequestInit) => Response>([
+        [`${endpoints.baseUrl}/v1/accounts/acc-9/claim`, () => json({ outcome: { kind } })],
+      ]))
+      const [provider] = buildRemoteProviders({
+        manifest: structuredClone(buddyManifestFixture),
+        endpoints,
+        fetch: routes,
+      })
+      expect(await provider.ops.claimCredits!(undefined as never, account('acc-9'))).toMatchObject({ kind })
+    }
+  })
+
+  it('claim protocol errors surface as UpstreamError (extension down)', async () => {
+    const routes = stubFetch(new Map<string, (init?: RequestInit) => Response>([
+      [`${endpoints.baseUrl}/v1/accounts/acc-9/claim`, () => json({ error: { kind: 'AUTH_INVALID', message: 'token rejected' } }, 401)],
+    ]))
+    const [provider] = buildRemoteProviders({
+      manifest: structuredClone(buddyManifestFixture),
+      endpoints,
+      fetch: routes,
+    })
+    await expect(provider.ops.claimCredits!(undefined as never, account('acc-9')))
+      .rejects.toMatchObject({ kind: 'AUTH_INVALID' })
+  })
+
+  it('getQuota normalizes the V1 snapshot without inventing numbers', async () => {
+    const routes = stubFetch(new Map<string, (init?: RequestInit) => Response>([
+      [`${endpoints.baseUrl}/v1/accounts/acc-9/quota`, () => json({
+        known: true, status: 'ok', remaining: 12.5, total: 100, resetAt: null,
+        resources: [{ id: 'credits', status: 'ok', remaining: 12.5, total: 100, unit: 'credits' }],
+      })],
+    ]))
+    const [provider] = buildRemoteProviders({
+      manifest: structuredClone(buddyManifestFixture),
+      endpoints,
+      fetch: routes,
+    })
+    const quota = await provider.ops.getQuota!(undefined as never, account('acc-9'))
+    expect(quota).toMatchObject({ known: true, remaining: 12.5, total: 100 })
+  })
+})

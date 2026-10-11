@@ -76,3 +76,57 @@ describe('api — request error mapping', () => {
     vi.unstubAllGlobals()
   })
 })
+
+describe('api — key lifecycle client', () => {
+  afterEach(() => {
+    storeToken('')
+    sessionStorage.clear()
+    vi.unstubAllGlobals()
+  })
+
+  it('createKey POSTs name/expiry and surfaces the one-time key', async () => {
+    storeToken('admin-tok')
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({ id: 'k1', name: 'pi', keyPrefix: 'abcd1234', enabled: true, createdAt: 1, lastUsedAt: null, expiresAt: null, revokedAt: null, key: 'gw-abcd1234.secret' }),
+          { status: 200 },
+        ),
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { api } = await import('./api')
+    const created = await api.createKey({ name: 'pi', expiresAt: 123 })
+    expect(created.key).toBe('gw-abcd1234.secret')
+    expect(fetchMock).toHaveBeenCalledWith('/api/keys', expect.objectContaining({
+      method: 'POST',
+      headers: expect.objectContaining({ Authorization: 'Bearer admin-tok' }),
+      body: JSON.stringify({ name: 'pi', expiresAt: 123 }),
+    }))
+  })
+
+  it('listKeys returns redacted metadata only (no key, no hash)', async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({ keys: [{ id: 'k1', name: 'n', keyPrefix: 'p', enabled: true, createdAt: 1, lastUsedAt: null, expiresAt: null, revokedAt: null }] }),
+          { status: 200 },
+        ),
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { api } = await import('./api')
+    const body = await api.listKeys()
+    expect(body.keys[0]).not.toHaveProperty('key')
+    expect(body.keys[0]).not.toHaveProperty('keyHash')
+    expect(fetchMock).toHaveBeenCalledWith('/api/keys', expect.anything())
+  })
+
+  it('revokeKey DELETEs by id', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 })))
+    vi.stubGlobal('fetch', fetchMock)
+    const { api } = await import('./api')
+    expect(await api.revokeKey('k1')).toMatchObject({ ok: true })
+    expect(fetchMock).toHaveBeenCalledWith('/api/keys/k1', expect.objectContaining({ method: 'DELETE' }))
+  })
+})

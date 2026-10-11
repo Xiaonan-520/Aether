@@ -314,7 +314,7 @@ describe('qoder adapter', () => {
   it('falls back to the product catalog (encrypted catalog is not decrypted)', async () => {
     const p = createQoderProvider({ fetcher: makeFetcher([]) })
     const models = await p.chat.listModels(ctx(), account())
-    expect(models.map((m) => m.modelId)).toEqual(QODER.fallbackModels.map((m) => m.id))
+    expect(models.map((m) => m.modelId)).toEqual(QODER.fallbackModels.map((m) => `qoder::${m.id}`))
     expect(models.every((m) => m.provider === 'qoder')).toBe(true)
   })
 

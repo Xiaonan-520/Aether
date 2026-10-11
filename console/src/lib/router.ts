@@ -10,6 +10,7 @@ export type Route =
   | { name: 'provider'; id: string }
   | { name: 'extensions' }
   | { name: 'extension'; id: string }
+  | { name: 'keys' }
 
 export function parseHash(hash: string): Route {
   const h = hash.replace(/^#\/?/, '')
@@ -17,6 +18,7 @@ export function parseHash(hash: string): Route {
   if (head === 'providers' && id) return { name: 'provider', id: decodeURIComponent(id) }
   if (head === 'extensions' && id) return { name: 'extension', id: decodeURIComponent(id) }
   if (head === 'extensions') return { name: 'extensions' }
+  if (head === 'keys') return { name: 'keys' }
   return { name: 'home' }
 }
 

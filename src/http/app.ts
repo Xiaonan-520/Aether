@@ -26,6 +26,7 @@ import {
 } from '../protocol/openai/serialize.js'
 import { toOpenAiErrorBody, toOpenAiStatus } from '../core/errors/normalizer.js'
 import { UpstreamError } from '../core/errors/upstream-error.js'
+import { AmbiguousModelError } from '../core/router/model-router.js'
 import { renderAuthorizePage, widgetParams } from '../providers/zcode/captcha/index.js'
 
 export interface GatewayApp {
@@ -293,6 +294,18 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
   app.post('/api/accounts/:id/quota-sync', (c) => {
     return c.json(admin.enqueueAccountJob(ctx, c.req.param('id'), 'quota_sync'))
   })
+  // Manual check-in trigger: same queue + idempotency as the recurring scan
+  // (scheduler-executors closes the day after the first real attempt, so
+  // repeated clicks cannot storm the upstream). Blocked for providers that
+  // do not declare supportsCredits.
+  app.post('/api/accounts/:id/credit-claim', (c) => {
+    return c.json(admin.enqueueAccountJob(ctx, c.req.param('id'), 'credit_claim'))
+  })
+  // Read-only claim history for one account: last recorded outcome today,
+  // from the same credit_claims rows the scheduler writes.
+  app.get('/api/accounts/:id/credit-claim', (c) => {
+    return c.json({ claims: admin.accountClaims(ctx, c.req.param('id')) })
+  })
   app.get('/api/events', (c) => {
     const limit = Number(c.req.query('limit') ?? 50)
     return c.json({ events: admin.listEvents(limit) })
@@ -311,6 +324,13 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
 
   // -- error handling -------------------------------------------------------
   app.onError((err, c) => {
+    if (err instanceof AmbiguousModelError) {
+      // bare model id matched several providers: tell the client how to disambiguate
+      return c.json(
+        { error: { message: err.message, type: 'invalid_request_error', code: 'model_ambiguous' } },
+        400,
+      )
+    }
     if (err instanceof OpenAIApiError) {
       return c.json(
         { error: { message: err.message, type: err.type, code: err.code } },

@@ -230,6 +230,34 @@ export const api = {
     request<{ jobId: string }>(`/api/accounts/${encodeURIComponent(accountId)}/${jobType}`, {
       method: 'POST',
     }),
+
+  // -- gateway API keys (POST /api/keys family) ------------------------------
+
+  /** The full key appears ONLY in this create response — never store it. */
+  createKey: (input: { name?: string; expiresAt?: number }) =>
+    request<CreatedApiKey>('/api/keys', { method: 'POST', body: JSON.stringify(input) }),
+
+  listKeys: () => request<{ keys: ApiKeyView[] }>('/api/keys'),
+
+  revokeKey: (id: string) =>
+    request<{ ok: boolean }>(`/api/keys/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+}
+
+/** Redacted key metadata — the core never sends the key or its hash here. */
+export interface ApiKeyView {
+  id: string
+  name: string
+  keyPrefix: string
+  enabled: boolean
+  createdAt: number
+  lastUsedAt: number | null
+  expiresAt: number | null
+  revokedAt: number | null
+}
+
+/** Create response: the one-and-only time the full key leaves the core. */
+export interface CreatedApiKey extends ApiKeyView {
+  key: string
 }
 
 export interface BeginLoginResult {

@@ -8,10 +8,19 @@ import type { Account, AccountPatch } from '../core/types.js'
 import { OpenAIApiError } from '../protocol/openai/parse.js'
 import type { ServiceContext } from './context.js'
 import { resolveCredentialJson, storeCredentialJson } from './context.js'
+import { dayKey } from '../store/memory-store.js'
 
 /** Never expose secrets or full credential blobs through the admin API. */
 function redactAccount(account: Account): Record<string, unknown> {
   return { ...account, credentialKey: `redacted(${account.credentialKey.length})` }
+}
+
+function safeParse(json: string): unknown {
+  try {
+    return JSON.parse(json)
+  } catch {
+    return null
+  }
 }
 
 export class AdminService {
@@ -120,11 +129,15 @@ export class AdminService {
   enqueueAccountJob(
     ctx: ServiceContext,
     accountId: string,
-    jobType: 'token_refresh' | 'quota_sync',
+    jobType: 'token_refresh' | 'quota_sync' | 'credit_claim',
   ): { jobId: string; accountId: string; jobType: string } {
     const stored = this.requireAccount(accountId)
     if (!stored.account.enabled) {
       throw new OpenAIApiError(409, 'invalid_request_error', `account "${accountId}" is disabled`)
+    }
+    if (jobType === 'credit_claim' && !ctx.registry.get(stored.account.provider)?.capabilities.supportsCredits) {
+      throw new OpenAIApiError(400, 'invalid_request_error',
+        `provider "${stored.account.provider}" does not declare supportsCredits`)
     }
     const jobId = ctx.scheduler.enqueue(jobType, accountId, stored.account.provider)
     this.ctx.store.addEvent({
@@ -136,6 +149,31 @@ export class AdminService {
 
   listEvents(limit: number): Record<string, unknown>[] {
     return this.ctx.store.listEvents(Math.min(Math.max(limit, 1), 500))
+  }
+
+  /**
+   * Read-only claim history for one account: recent scheduler jobs of type
+   * `credit_claim` plus today's recorded outcome (if any). Read only — the
+   * trigger is POST /api/accounts/:id/credit-claim.
+   */
+  accountClaims(ctx: ServiceContext, accountId: string): Record<string, unknown>[] {
+    const stored = this.requireAccount(accountId)
+    const jobs = ctx.store
+      .listJobs('credit_claim')
+      .filter((j) => j.accountId === accountId)
+      .slice(-20)
+      .reverse()
+    const today = dayKey(ctx.now())
+    const todayOutcome = ctx.store.lastClaimOutcome(accountId, 'credit_claim', today)
+    return jobs.map((j) => ({
+      jobId: j.id,
+      status: j.status,
+      scheduledAt: j.scheduledAt,
+      finishedAt: j.finishedAt,
+      error: j.error,
+      result: j.resultJson ? (safeParse(j.resultJson) ?? j.resultJson) : null,
+      ...(j === jobs[0] && todayOutcome ? { todayOutcome } : {}),
+    }))
   }
 
   private requireAccount(id: string) {

@@ -115,7 +115,7 @@ describe('POST /api/accounts/:provider/login', () => {
 
     // models become visible
     const models = (await (await app.request('/v1/models', { headers: { Authorization: 'Bearer gw-key-123' } })).json()) as { data: Array<{ id: string }> }
-    expect(models.data.map((m) => m.id)).toContain('glm-5.3')
+    expect(models.data.map((m) => m.id)).toContain('workbuddy::glm-5.3')
   })
 
   it('starts a ZCode login (OAuth URL)', async () => {

@@ -5,6 +5,7 @@
  */
 import type { ServiceContext } from './context.js'
 import { OpenAIApiError } from '../protocol/openai/parse.js'
+import { ModelService } from './model-service.js'
 import { dayKey } from '../store/memory-store.js'
 
 /** The provider's quota snapshot as stored on the account (rawJson preserved). */
@@ -67,6 +68,10 @@ const ATTENTION_STATUSES = new Set([
 
 export class ConsoleService {
   constructor(private readonly ctx: ServiceContext) {}
+
+  private get models(): ModelService {
+    return new ModelService(this.ctx)
+  }
 
   getOverview(): ConsoleOverview {
     const now = this.ctx.now()
@@ -167,12 +172,10 @@ export class ConsoleService {
 
   listProviderModels(id: string): Array<Record<string, unknown>> {
     this.requireProvider(id)
-    const openAiModelIds = new Set(
-      this.ctx.store
-        .listModels()
-        .filter((m) => m.enabled)
-        .map((m) => m.modelId),
-    )
+    // The set of ids a client actually sees on /v1/models — computed by the
+    // SAME ModelService listing rule (including bare-row shadowing), never a
+    // local re-implementation that would drift from the public endpoint.
+    const openAiModelIds = new Set(this.models.list().map((m) => m.id))
     return this.ctx.store
       .listModels()
       .filter((m) => m.provider === id)

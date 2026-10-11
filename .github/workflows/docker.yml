@@ -45,6 +45,67 @@ jobs:
       - name: Build
         run: npm run build
 
+  # Console SPA: typecheck, lint, unit tests and a production build.
+  # Node setup is duplicated per job on purpose — jobs run on fresh runners.
+  console-verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: console
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  # WorkBuddyCN extension: typecheck, unit tests and conformance suite.
+  extension-verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extensions/workbuddycn
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: extensions/workbuddycn/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Conformance suite
+        run: npm run conformance
+
+      - name: Build
+        run: npm run build
+
       # PRs and forks never publish; also builds the image on PRs so a broken
       # Dockerfile is caught before merge.
       - name: Build image (no push on PR)
@@ -58,7 +119,7 @@ jobs:
 
   build-and-push:
     if: github.event_name != 'pull_request'
-    needs: verify
+    needs: [verify, console-verify, extension-verify]
     runs-on: ubuntu-latest
     permissions:
       contents: read

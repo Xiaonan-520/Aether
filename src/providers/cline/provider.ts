@@ -26,6 +26,7 @@ import type {
   RefreshResult,
 } from '../../core/registry/provider.js'
 import { UpstreamError } from '../../core/errors/upstream-error.js'
+import { modelIdOf } from '../../core/naming.js'
 import { decodeSseStream } from '../../protocol/openai/sse.js'
 import {
   CLINE,
@@ -392,7 +393,7 @@ export function createClineProvider(options: ClineProviderOptions = {}): Provide
         const catalog = await discoverCatalog(credential)
         const source = catalog.length > 0 ? catalog : product.fallbackModels.map((m) => ({ ...m, isFree: m.id.startsWith('cline-free/') }))
         return source.map((m) => ({
-          modelId: m.id,
+          modelId: modelIdOf(product.id, m.id),
           provider: product.id,
           upstreamModel: m.id,
           name: m.name,

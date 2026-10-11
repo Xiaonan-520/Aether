@@ -237,7 +237,7 @@ describe('raccoon adapter — runtime', () => {
       ]),
     })
     expect(await ok.ops.healthCheck!(ctx(), account())).toMatchObject({ ok: true })
-    expect((await ok.chat.listModels(ctx(), account()))[0]).toMatchObject({ modelId: 'sn-glm-5-3', provider: 'raccoon' })
+    expect((await ok.chat.listModels(ctx(), account()))[0]).toMatchObject({ modelId: 'raccoon::sn-glm-5-3', provider: 'raccoon' })
 
     const bad = createRaccoonProvider({ fetcher: makeFetcher([{ match: RACCOON_CHAT_PATH, status: 401 }]) })
     await expect(bad.chat.chat(ctx(), { model: 'm', messages: [], stream: false }, account()))

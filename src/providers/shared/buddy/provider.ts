@@ -26,6 +26,7 @@ import type {
   RefreshResult,
 } from '../../../core/registry/provider.js'
 import { UpstreamError } from '../../../core/errors/upstream-error.js'
+import { modelIdOf } from '../../../core/naming.js'
 import {
   CHAT_PATH,
 } from './constants.js'
@@ -381,7 +382,7 @@ export function createBuddyProvider(product: BuddyProduct, fetcher: Fetcher = fe
         if (!credential) return []
         const remote = await fetchBuddyModels(product, credential, fetcher)
         return remote.map((m, index) => ({
-          modelId: m.id,
+          modelId: modelIdOf(product.id, m.id),
           provider: product.id,
           upstreamModel: m.id,
           name: m.name,

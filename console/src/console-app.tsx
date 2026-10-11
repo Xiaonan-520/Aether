@@ -20,6 +20,7 @@ import { MoonIcon, SunIcon } from 'lucide-react'
 import { HomePage } from './pages/home-page'
 import { ProviderPage } from './pages/provider-page'
 import { ExtensionsPage, ExtensionDetailPage } from './pages/extensions-page'
+import { KeysPage } from './pages/keys-page'
 
 export function ConsoleApp({
   theme,
@@ -63,6 +64,13 @@ export function ConsoleApp({
               >
                 Extensions
               </a>
+              <a
+                href="#/keys"
+                aria-current={route.name === 'keys' ? 'page' : undefined}
+                className="rounded-md px-2.5 py-1.5 text-muted-foreground transition-colors hover:text-foreground aria-[current=page]:bg-muted aria-[current=page]:text-foreground"
+              >
+                API Keys
+              </a>
             </nav>
             <div className="ml-auto flex items-center gap-2">
               {token ? <span className="hidden text-xs text-muted-foreground md:inline">admin session active</span> : null}
@@ -93,6 +101,8 @@ export function ConsoleApp({
               <ExtensionsPage onOpen={(id) => navigate(`#/extensions/${encodeURIComponent(id)}`)} />
             ) : route.name === 'extension' ? (
               <ExtensionDetailPage id={route.id} onBack={() => navigate('#/extensions')} />
+            ) : route.name === 'keys' ? (
+              <KeysPage />
             ) : null
           ) : (
             <TokenGate onDone={(t) => { storeToken(t); setToken(t) }} />

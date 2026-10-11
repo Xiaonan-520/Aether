@@ -226,8 +226,8 @@ describe('cline adapter', () => {
     const p = createClineProvider({ fetcher })
     const models = await p.chat.listModels(ctx(), account())
     const map = new Map(models.map((m) => [m.modelId, m]))
-    expect(map.has('anthropic/claude-sonnet-4.5')).toBe(true)
-    expect(JSON.parse(map.get('cline-free/gemini-3.8-flash')!.metadataJson!)).toEqual({ free: true })
+    expect(map.has('cline::anthropic/claude-sonnet-4.5')).toBe(true)
+    expect(JSON.parse(map.get('cline::cline-free/gemini-3.8-flash')!.metadataJson!)).toEqual({ free: true })
   })
 
   it('aggregates non-stream chat from the SSE-only upstream with workos bearer', async () => {

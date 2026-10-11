@@ -26,6 +26,7 @@ import type {
   RefreshResult,
 } from '../../core/registry/provider.js'
 import { UpstreamError } from '../../core/errors/upstream-error.js'
+import { modelIdOf } from '../../core/naming.js'
 import { TRAE, type TraeProduct } from './product.js'
 import {
   TRAE_BATCH_MODELS_PATH,
@@ -300,7 +301,7 @@ export function createTraeProvider(options: TraeProviderOptions = {}): Provider 
           ? remote.map((m) => ({ id: m.id, name: m.name }))
           : product.fallbackModels.map((m) => ({ ...m }))
         return source.map((m) => ({
-          modelId: m.id,
+          modelId: modelIdOf(product.id, m.id),
           provider: product.id,
           upstreamModel: m.id,
           name: m.name,

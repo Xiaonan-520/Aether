@@ -55,8 +55,9 @@ describe('zcode provider registration', () => {
   it('lists the static Z.AI catalog', async () => {
     const provider = createZCodeProvider()
     const models = await provider.chat.listModels(ctxWith({ jwt_token: 'j' }), account())
-    expect(models.map((m) => m.modelId)).toContain('glm-5.1')
+    expect(models.map((m) => m.modelId)).toContain('zcode::glm-5.1')
     expect(models.every((m) => m.provider === 'zcode')).toBe(true)
+    expect(models.every((m) => m.modelId.startsWith('zcode::'))).toBe(true)
   })
 })
 

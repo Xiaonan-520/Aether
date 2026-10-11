@@ -32,6 +32,7 @@ import type {
   RefreshResult,
 } from '../../core/registry/provider.js'
 import { UpstreamError } from '../../core/errors/upstream-error.js'
+import { modelIdOf } from '../../core/naming.js'
 import { QODER, type QoderProduct } from './product.js'
 import {
   QODER_CAMPAIGNS_PATH,
@@ -372,7 +373,7 @@ export function createQoderProvider(options: QoderProviderOptions = {}): Provide
         void ctx
         void account
         return product.fallbackModels.map((m) => ({
-          modelId: m.id,
+          modelId: modelIdOf(product.id, m.id),
           provider: product.id,
           upstreamModel: m.id,
           name: m.name,

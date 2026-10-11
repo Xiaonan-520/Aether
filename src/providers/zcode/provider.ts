@@ -28,6 +28,7 @@ import type {
   RefreshResult,
 } from '../../core/registry/provider.js'
 import { UpstreamError } from '../../core/errors/upstream-error.js'
+import { modelIdOf } from '../../core/naming.js'
 import {
   ZCodeCaptchaManager,
   ZCodeCaptchaUnavailableError,
@@ -421,7 +422,7 @@ export function createZCodeProvider(options: ZCodeProviderOptions = {}): Provide
     chat: {
       async listModels(): Promise<ModelEntry[]> {
         return ZCODE_MODELS.map((model, index) => ({
-          modelId: model.id,
+          modelId: modelIdOf('zcode', model.id),
           provider: 'zcode',
           upstreamModel: model.id,
           name: model.name,

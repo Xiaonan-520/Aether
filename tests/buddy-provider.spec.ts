@@ -190,7 +190,7 @@ describe('buddy models and quota', () => {
     const provider = createWorkBuddyProvider(fetcher)
     const models = await provider.chat.listModels(ctxFor('workbuddy'), account())
     expect(models).toHaveLength(1)
-    expect(models[0]).toMatchObject({ modelId: 'glm-5.3', provider: 'workbuddy', upstreamModel: 'glm-5.3' })
+    expect(models[0]).toMatchObject({ modelId: 'workbuddy::glm-5.3', provider: 'workbuddy', upstreamModel: 'glm-5.3' })
   })
 
   it('reports quota as unknown rather than inventing numbers', async () => {

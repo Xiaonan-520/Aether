@@ -72,7 +72,7 @@ function setup() {
     now: () => Date.now(),
     captcha: new ZCodeCaptchaManager(),
   }
-  return { ...createGatewayApp(ctx), store, scheduler }
+  return { ...createGatewayApp(ctx), store, scheduler, registry }
 }
 
 describe('console API — auth', () => {
@@ -125,6 +125,57 @@ describe('console API — models / quotas / claims', () => {
     const body = await res.json()
     expect(body.models.length).toBeGreaterThan(0)
     expect(body.models[0]).toMatchObject({ exposedOnV1: true })
+  })
+
+  it('marks a bare shadow row as NOT exposedOnV1 once a canonical row exists', async () => {
+    const { app, store } = setup()
+    store.upsertModels([{
+      modelId: 'mock::mock-model', provider: 'mock', upstreamModel: 'mock-model',
+      name: 'Mock Model', capabilities: { vision: false, toolCall: false, streaming: true },
+      enabled: true, priority: 10, metadataJson: null,
+    }])
+    const res = await app.request('/api/console/providers/mock/models', {
+      headers: { Authorization: ADMIN },
+    })
+    const body = await res.json()
+    const canonical = body.models.find((m: { modelId: string }) => m.modelId === 'mock::mock-model')
+    const shadow = body.models.find((m: { modelId: string }) => m.modelId === 'mock-model')
+    expect(canonical).toMatchObject({ exposedOnV1: true })
+    expect(shadow).toMatchObject({ exposedOnV1: false })
+  })
+
+  it('marks a disabled row as NOT exposedOnV1 even without a canonical twin', async () => {
+    const { app, store } = setup()
+    store.upsertModels([{
+      modelId: 'mock::retired', provider: 'mock', upstreamModel: 'retired',
+      name: 'retired', capabilities: { vision: false, toolCall: false, streaming: true },
+      enabled: false, priority: 0, metadataJson: null,
+    }])
+    const res = await app.request('/api/console/providers/mock/models', {
+      headers: { Authorization: ADMIN },
+    })
+    const body = await res.json()
+    const retired = body.models.find((m: { modelId: string }) => m.modelId === 'mock::retired')
+    expect(retired).toMatchObject({ enabled: false, exposedOnV1: false })
+  })
+
+  it('exposedOnV1 agrees with the actual /v1/models output', async () => {
+    const { app, store } = setup()
+    store.upsertModels([{
+      modelId: 'mock::mock-model', provider: 'mock', upstreamModel: 'mock-model',
+      name: 'Mock Model', capabilities: { vision: false, toolCall: false, streaming: true },
+      enabled: true, priority: 10, metadataJson: null,
+    }])
+    const consoleBody = await (await app.request('/api/console/providers/mock/models', {
+      headers: { Authorization: ADMIN },
+    })).json()
+    const v1Body = await (await app.request('/v1/models', {
+      headers: { Authorization: 'Bearer gw-key-123' },
+    })).json()
+    const v1Ids = new Set((v1Body.data as Array<{ id: string }>).map((m) => m.id))
+    for (const m of consoleBody.models as Array<{ modelId: string; exposedOnV1: boolean }>) {
+      expect(v1Ids.has(m.modelId)).toBe(m.exposedOnV1)
+    }
   })
 
   it('lists quotas with explicit unknown-state fields, never fake zeros', async () => {
@@ -198,6 +249,81 @@ describe('console API — manual job triggers', () => {
     const body = await res.json()
     const jobs = store.listJobs('quota_sync')
     expect(jobs.some((j) => j.id === body.jobId && j.accountId === 'mock-a1')).toBe(true)
+  })
+
+  it('POST /api/accounts/:id/credit-claim is blocked for providers without supportsCredits', async () => {
+    const { app } = setup() // mock provider declares supportsCredits: false
+    const res = await app.request('/api/accounts/mock-a1/credit-claim', {
+      method: 'POST', headers: { Authorization: ADMIN },
+    })
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.message).toContain('supportsCredits')
+  })
+
+  it('POST /api/accounts/:id/credit-claim requires the admin token', async () => {
+    const { app } = setup()
+    const res = await app.request('/api/accounts/mock-a1/credit-claim', { method: 'POST' })
+    expect(res.status).toBe(401)
+    // a gateway API key must not pass as admin either (auth separation)
+    const res2 = await app.request('/api/accounts/mock-a1/credit-claim', {
+      method: 'POST', headers: { Authorization: 'Bearer gw-key-123' },
+    })
+    expect(res2.status).toBe(401)
+  })
+
+  it('POST /api/accounts/:id/credit-claim enqueues through the scheduler queue (idempotent re-run)', async () => {
+    const { app, store, registry } = setup()
+    // a second provider that DOES declare supportsCredits
+    const claimer = new MockProvider({ id: 'claimer', models: mockModels('claimer') })
+    Object.assign(claimer.capabilities, { supportsCredits: true })
+    registry.register(claimer)
+    store.createAccount(account('claimer', 'claimer-a1'))
+    const res = await app.request('/api/accounts/claimer-a1/credit-claim', {
+      method: 'POST', headers: { Authorization: ADMIN },
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toMatchObject({ accountId: 'claimer-a1', jobType: 'credit_claim' })
+    // a second click creates a second queued job — the executor (day-closing
+    // guard) decides idempotency, the API never bypasses the queue
+    await app.request('/api/accounts/claimer-a1/credit-claim', {
+      method: 'POST', headers: { Authorization: ADMIN },
+    })
+    const jobs = store.listJobs('credit_claim').filter((j) => j.accountId === 'claimer-a1')
+    expect(jobs.length).toBe(2)
+    expect(new Set(jobs.map((j) => j.id)).size).toBe(2)
+  })
+
+  it('GET /api/accounts/:id/credit-claim returns read-only job history', async () => {
+    const { app, store } = setup()
+    const res = await app.request('/api/accounts/mock-a1/credit-claim', {
+      headers: { Authorization: ADMIN },
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(Array.isArray(body.claims)).toBe(true)
+    // seed a job and confirm it shows up with no secret material
+    store.createJob({
+      id: 'job-claim-1', provider: 'mock', accountId: 'mock-a1', jobType: 'credit_claim',
+      scheduledAt: 1, startedAt: null, finishedAt: null, status: 'pending',
+      error: null, resultJson: null, attempts: 0,
+    })
+    const res2 = await app.request('/api/accounts/mock-a1/credit-claim', {
+      headers: { Authorization: ADMIN },
+    })
+    const body2 = await res2.json()
+    expect(body2.claims).toHaveLength(1)
+    expect(body2.claims[0]).toMatchObject({ jobId: 'job-claim-1', status: 'pending' })
+    expect(JSON.stringify(body2)).not.toContain('token')
+  })
+
+  it('GET /api/accounts/:id/credit-claim 404s for an unknown account', async () => {
+    const { app } = setup()
+    const res = await app.request('/api/accounts/nope/credit-claim', {
+      headers: { Authorization: ADMIN },
+    })
+    expect(res.status).toBe(404)
   })
 
   it('returns 404 for an unknown account', async () => {

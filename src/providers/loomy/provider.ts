@@ -26,6 +26,7 @@ import type {
   RefreshResult,
 } from '../../core/registry/provider.js'
 import { UpstreamError } from '../../core/errors/upstream-error.js'
+import { modelIdOf } from '../../core/naming.js'
 import { decodeSseStream } from '../../protocol/openai/sse.js'
 import {
   LOOMY,
@@ -309,7 +310,7 @@ export function createLoomyProvider(options: LoomyProviderOptions = {}): Provide
         }
         const source = remote.length > 0 ? remote : product.fallbackModels.map((m) => ({ ...m }))
         return source.map((m) => ({
-          modelId: m.id,
+          modelId: modelIdOf(product.id, m.id),
           provider: product.id,
           upstreamModel: m.id,
           name: m.name,

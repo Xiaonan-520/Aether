@@ -13,6 +13,7 @@
 import { buildRemoteProviders } from '../protocol/extension/remote-provider.js'
 import type { ProviderRegistry } from '../core/registry/provider-registry.js'
 import type { ServiceContext } from '../service/context.js'
+import { modelIdOf } from '../core/naming.js'
 
 export interface ManagerEndpoint {
   managerUrl: string
@@ -62,7 +63,7 @@ export async function registerRemoteExtensions(
       for (const p of pkg.manifest.providers) {
         for (const m of p.fallbackModels ?? []) {
           ctx.store.upsertModels([{
-            modelId: `${p.id}::${m.id}`,
+            modelId: modelIdOf(p.id, m.id),
             provider: p.id,
             upstreamModel: m.id,
             name: m.name,

@@ -28,3 +28,11 @@ describe('router — parseHash', () => {
     expect(parseHash('#/extensions/gw%2Bext')).toEqual({ name: 'extension', id: 'gw+ext' })
   })
 })
+
+describe('router — keys route', () => {
+  it('parses the #/keys route', async () => {
+    const { parseHash } = await import('./router')
+    expect(parseHash('#/keys')).toEqual({ name: 'keys' })
+    expect(parseHash('#/keys/extra')).toEqual({ name: 'keys' })
+  })
+})

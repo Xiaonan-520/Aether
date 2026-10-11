@@ -291,7 +291,14 @@ export function ExtensionDetailPage({ id, onBack }: { id: string; onBack: () => 
         <CardContent className="flex flex-col gap-3">
           <div className="flex flex-wrap gap-1.5">
             {ext.providers.map((p) => (
-              <Badge key={p} variant="secondary" className="font-mono">{p}</Badge>
+              <a
+                key={p}
+                href={`#/providers/${encodeURIComponent(p)}`}
+                title={`Open ${p} in the Providers view`}
+                className="transition-colors"
+              >
+                <Badge variant="secondary" className="font-mono hover:bg-primary/15">{p}</Badge>
+              </a>
             ))}
           </div>
           <Separator />
@@ -299,6 +306,7 @@ export function ExtensionDetailPage({ id, onBack }: { id: string; onBack: () => 
             {ext.providersRegistered
               ? 'All declared providers are mounted in the core registry.'
               : 'Declared providers are NOT all mounted — use "Reload providers" after an upgrade (the extension token rotates).'}
+            {ext.providers.length > 0 ? ' Click a provider to inspect its models.' : ''}
           </p>
         </CardContent>
       </Card>

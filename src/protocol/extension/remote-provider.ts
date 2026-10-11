@@ -38,6 +38,7 @@ import type {
 } from '../../core/registry/provider.js'
 import type { ProviderRegistry } from '../../core/registry/provider-registry.js'
 import { UpstreamError } from '../../core/errors/upstream-error.js'
+import { modelIdOf } from '../../core/naming.js'
 import { extensionErrorToUpstreamError, type ExtensionErrorBody } from './errors.js'
 import type { ExtensionManifest } from './manifest.js'
 import { validateManifest } from './validate-manifest.js'
@@ -429,7 +430,7 @@ export class RemoteProvider implements Provider {
           // Public model IDs are namespaced `provider::upstream` (same rule as the
           // bootstrap fallback seeding in src/http/remote-bootstrap.ts); the raw
           // upstream id stays in upstreamModel for extension-bound requests.
-          modelId: `${providerId}::${m.id}`,
+          modelId: modelIdOf(providerId, m.id),
           provider: providerId,
           upstreamModel: m.id,
           name: m.name,

@@ -177,14 +177,14 @@ describe('lobsterai adapter', () => {
     )
     const p = createLobsteraiProvider({ fetcher })
     const models = await p.chat.listModels(ctx(), account())
-    expect(models[0]).toMatchObject({ modelId: 'glm-5', provider: 'lobsterai', upstreamModel: 'glm-5' })
+    expect(models[0]).toMatchObject({ modelId: 'lobsterai::glm-5', provider: 'lobsterai', upstreamModel: 'glm-5' })
     expect(sawCapabilities).toBe(true)
   })
 
   it('falls back to the static catalog when discovery fails', async () => {
     const p = createLobsteraiProvider({ fetcher: makeFetcher([]) })
     const models = await p.chat.listModels(ctx(), account())
-    expect(models.map((m) => m.modelId)).toEqual(LOBSTERAI.fallbackModels.map((m) => m.id))
+    expect(models.map((m) => m.modelId)).toEqual(LOBSTERAI.fallbackModels.map((m) => `lobsterai::${m.id}`))
   })
 
   it('aggregates a non-stream chat from the SSE-only upstream', async () => {
