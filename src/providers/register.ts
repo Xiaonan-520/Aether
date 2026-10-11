@@ -11,7 +11,6 @@ import { createCodeBuddyProvider } from './codebuddy/index.js'
 import { createWorkBuddyProvider } from './workbuddy/index.js'
 import { createWorkBuddyCnProvider } from './workbuddy-cn/index.js'
 import { createBuddyIntlProvider } from './buddy-intl/index.js'
-import { createCodeArtsProvider } from './codearts/index.js'
 import { createQoderProvider } from './qoder/index.js'
 import { QODER, QODER_CN } from './qoder/product.js'
 import { createZCodeProvider } from './zcode/index.js'
@@ -45,7 +44,8 @@ export function registerProviders(
   // trae (both product instances): migrated to the extension deployable
   // (src/extensions/trae, one image serving trae/trae-intl via TRAE_PRODUCT)
   // — batch 4 of the provider migration.
-  registry.register(createCodeArtsProvider(options.fetcher ? { fetcher: options.fetcher } : {}))
+  // codearts: migrated to the extension deployable (src/extensions/codearts)
+  // — batch 5 of the provider migration.
   // loomy: migrated to the extension deployable (src/extensions/loomy,
   // installed via the Extension Manager) — batch 2 of the provider migration.
   registry.register(createQoderProvider({ product: QODER, ...(options.fetcher ? { fetcher: options.fetcher } : {}) }))
