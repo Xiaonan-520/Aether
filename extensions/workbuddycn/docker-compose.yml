@@ -1,0 +1,35 @@
+# Standalone self-test compose for gateway-extension-workbuddycn.
+#
+# NOTE: in production the Phase 3 Extension Manager creates this container from
+# the manifest (see docs/PROTOCOL_CONTRACT.md) — it joins `gw-ext-net`, injects
+# GATEWAY_EXTENSION_TOKEN, and mounts the named volume `gw-ext-workbuddycn-state`
+# at /data. This file exists ONLY for local/manual smoke testing.
+services:
+  workbuddycn-extension:
+    image: local/gateway-extension-workbuddycn:1.0.0
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gateway-extension-workbuddycn-selftest
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
+      DATA_DIR: /data
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+      # Local self-test only. In production the Manager injects
+      # GATEWAY_EXTENSION_TOKEN at container creation.
+      GATEWAY_EXTENSION_TOKEN: "${GATEWAY_EXTENSION_TOKEN:-local-dev-token}"
+    ports:
+      # Loopback only — the Manager-created container publishes no ports at all.
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - wbcn-selftest-data:/data
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+
+volumes:
+  wbcn-selftest-data:
