@@ -15,7 +15,6 @@ import { createClineProvider } from './cline/index.js'
 import { createTraeProvider } from './trae/index.js'
 import { TRAE, TRAE_INTL } from './trae/product.js'
 import { createCodeArtsProvider } from './codearts/index.js'
-import { createLoomyProvider } from './loomy/index.js'
 import { createQoderProvider } from './qoder/index.js'
 import { QODER, QODER_CN } from './qoder/product.js'
 import { createZCodeProvider } from './zcode/index.js'
@@ -48,7 +47,8 @@ export function registerProviders(
   registry.register(createTraeProvider({ product: TRAE, ...(options.fetcher ? { fetcher: options.fetcher } : {}) }))
   registry.register(createTraeProvider({ product: TRAE_INTL, ...(options.fetcher ? { fetcher: options.fetcher } : {}) }))
   registry.register(createCodeArtsProvider(options.fetcher ? { fetcher: options.fetcher } : {}))
-  registry.register(createLoomyProvider(options.fetcher ? { fetcher: options.fetcher } : {}))
+  // loomy: migrated to the extension deployable (src/extensions/loomy,
+  // installed via the Extension Manager) — batch 2 of the provider migration.
   registry.register(createQoderProvider({ product: QODER, ...(options.fetcher ? { fetcher: options.fetcher } : {}) }))
   registry.register(createQoderProvider({ product: QODER_CN, ...(options.fetcher ? { fetcher: options.fetcher } : {}) }))
   // raccoon: migrated to the extension deployable (src/extensions/raccoon,
