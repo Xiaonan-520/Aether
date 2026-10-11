@@ -66,7 +66,7 @@ describe('provider registration', () => {
     const ids = body.providers.map((p) => p.id).sort()
     expect(ids).toEqual([
       'buddy-intl', 'codearts', 'codebuddy',
-      'qoder', 'qoder-cn', 'trae', 'trae-intl', 'workbuddy', 'workbuddy-cn', 'zcode',
+      'qoder', 'qoder-cn', 'workbuddy', 'workbuddy-cn', 'zcode',
     ])
   })
 })
