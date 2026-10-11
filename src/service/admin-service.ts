@@ -112,6 +112,28 @@ export class AdminService {
     return this.ctx.store.listJobs(jobType)
   }
 
+  /**
+   * Enqueue one manual scheduler job for an account via the admin API. The
+   * job goes through the same queue, concurrency limits and idempotency as
+   * the recurring schedule — the console never runs adapter code directly.
+   */
+  enqueueAccountJob(
+    ctx: ServiceContext,
+    accountId: string,
+    jobType: 'token_refresh' | 'quota_sync',
+  ): { jobId: string; accountId: string; jobType: string } {
+    const stored = this.requireAccount(accountId)
+    if (!stored.account.enabled) {
+      throw new OpenAIApiError(409, 'invalid_request_error', `account "${accountId}" is disabled`)
+    }
+    const jobId = ctx.scheduler.enqueue(jobType, accountId, stored.account.provider)
+    this.ctx.store.addEvent({
+      ts: this.ctx.now(), level: 'info', provider: stored.account.provider, accountId,
+      kind: `job.enqueued`, message: `${jobType} enqueued for ${accountId} via admin API`,
+    })
+    return { jobId, accountId, jobType }
+  }
+
   listEvents(limit: number): Record<string, unknown>[] {
     return this.ctx.store.listEvents(Math.min(Math.max(limit, 1), 500))
   }

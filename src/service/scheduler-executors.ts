@@ -75,8 +75,17 @@ export function registerSchedulerExecutors(
     }
     if (outcome.kind === 'success') {
       store.patchAccount(account.id, { lastCreditClaimAt: at, status: 'active' })
+      store.addEvent({
+        ts: at, level: 'info', provider: account.provider, accountId: account.id,
+        kind: 'claim.success', message: `credit claim succeeded for ${account.id}`,
+      })
     } else if (outcome.kind === 'needs_manual_action') {
       store.patchAccount(account.id, { quotaManualRequired: true, status: 'needs_manual_action' })
+    } else if (outcome.kind !== 'not_available' && outcome.kind !== 'already_claimed') {
+      store.addEvent({
+        ts: at, level: 'warn', provider: account.provider, accountId: account.id,
+        kind: 'claim.failed', message: `credit claim for ${account.id}: ${outcome.kind}`,
+      })
     }
     return outcome
   })
