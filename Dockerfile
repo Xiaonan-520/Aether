@@ -17,6 +17,12 @@ COPY scripts ./scripts
 RUN npm run build
 # prune to production deps for the runtime image
 RUN npm prune --omit=dev
+# console web build (served by the gateway under /console). Separate npm ci
+# so console dependency churn does not invalidate the core build layers.
+COPY console/package.json console/package-lock.json ./console/
+RUN npm ci --prefix console
+COPY console ./console
+RUN npm run build --prefix console
 
 FROM node:22-slim AS runtime
 # OCI labels: the source label lets GHCR link the package to this repository
@@ -32,6 +38,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
   && groupadd -r gateway && useradd -r -g gateway gateway
 COPY --from=build /build/node_modules ./node_modules
 COPY --from=build /build/dist ./dist
+# static console SPA; the gateway serves it at /console when present
+COPY --from=build /build/dist-console ./dist-console
 COPY package.json ./
 # data volume ownership (SQLite db + secrets live here)
 RUN mkdir -p /data && chown gateway:gateway /data

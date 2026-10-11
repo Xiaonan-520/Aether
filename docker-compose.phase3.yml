@@ -20,7 +20,7 @@
 
 services:
   gateway:
-    image: local/mpag-phase3:1.1.6
+    image: local/mpag-phase3:1.1.9
     build:
       context: .
       dockerfile: Dockerfile
@@ -39,7 +39,7 @@ services:
       - gw-ext-net
 
   phase3-extension-manager:
-    image: local/mpag-phase3:1.1.6
+    image: local/mpag-phase3:1.1.9
     container_name: phase3-extension-manager
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:9100/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]

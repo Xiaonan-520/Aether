@@ -1,5 +1,7 @@
 node_modules/
 dist/
+# console web build output (served by the gateway under /console)
+/dist-console/
 data/
 *.db
 *.db-*

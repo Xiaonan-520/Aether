@@ -11,7 +11,12 @@
     "start": "node dist/http/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "migrate": "tsx scripts/migrate.ts"
+    "migrate": "tsx scripts/migrate.ts",
+    "console:dev": "npm run dev --prefix console",
+    "console:build": "npm run build --prefix console",
+    "console:typecheck": "npm run typecheck --prefix console",
+    "console:test": "npm run test --prefix console",
+    "console:lint": "npm run lint --prefix console"
   },
   "engines": {
     "node": ">=18"

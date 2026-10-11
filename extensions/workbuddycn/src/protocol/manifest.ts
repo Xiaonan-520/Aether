@@ -17,8 +17,8 @@ import { EXTENSION_ID, PROVIDER_ID, PROTOCOL_VERSION } from './types.js'
 // Keep in sync with package.json "version" — enforced by test/unit/manifest.spec.ts.
 // History: 1.0.0 shipped as image tag 1.0.0; the 1.0.1 image (claim route) failed
 // to bump this field, so Manager records showed version=1.0.0 / imageTag=1.0.1.
-// 1.0.2 restores the version==imageTag invariant.
-export const EXTENSION_VERSION = '1.0.2'
+// 1.0.3: M0 E2E version-migration rehearsal (no functional change).
+export const EXTENSION_VERSION = '1.0.3'
 
 /** Fallback catalog (mirrors the upstream `buddy` CN static list). Live discovery wins. */
 const FALLBACK_MODELS: ReadonlyArray<{
