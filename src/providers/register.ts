@@ -11,7 +11,6 @@ import { createCodeBuddyProvider } from './codebuddy/index.js'
 import { createWorkBuddyProvider } from './workbuddy/index.js'
 import { createWorkBuddyCnProvider } from './workbuddy-cn/index.js'
 import { createBuddyIntlProvider } from './buddy-intl/index.js'
-import { createClineProvider } from './cline/index.js'
 import { createTraeProvider } from './trae/index.js'
 import { TRAE, TRAE_INTL } from './trae/product.js'
 import { createCodeArtsProvider } from './codearts/index.js'
@@ -42,7 +41,8 @@ export function registerProviders(
   // lobsterai: migrated to the extension deployable (src/extensions/lobsterai,
   // installed via the Extension Manager). No in-process adapter anymore —
   // Phase 3 dual-track ends here for this provider.
-  registry.register(createClineProvider(options.fetcher ? { fetcher: options.fetcher } : {}))
+  // cline: migrated to the extension deployable (src/extensions/cline,
+  // installed via the Extension Manager) — batch 3 of the provider migration.
   registry.register(createZCodeProvider({ captcha, ...(options.fetcher ? { fetcher: options.fetcher } : {}) }))
   registry.register(createTraeProvider({ product: TRAE, ...(options.fetcher ? { fetcher: options.fetcher } : {}) }))
   registry.register(createTraeProvider({ product: TRAE_INTL, ...(options.fetcher ? { fetcher: options.fetcher } : {}) }))

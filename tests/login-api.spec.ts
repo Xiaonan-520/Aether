@@ -65,7 +65,7 @@ describe('provider registration', () => {
     const body = (await res.json()) as { providers: Array<{ id: string }> }
     const ids = body.providers.map((p) => p.id).sort()
     expect(ids).toEqual([
-      'buddy-intl', 'cline', 'codearts', 'codebuddy',
+      'buddy-intl', 'codearts', 'codebuddy',
       'qoder', 'qoder-cn', 'trae', 'trae-intl', 'workbuddy', 'workbuddy-cn', 'zcode',
     ])
   })
