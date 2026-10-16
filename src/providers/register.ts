@@ -8,8 +8,6 @@
  */
 import type { ProviderRegistry } from '../core/registry/provider-registry.js'
 import { createCodeBuddyProvider } from './codebuddy/index.js'
-import { createWorkBuddyProvider } from './workbuddy/index.js'
-import { createWorkBuddyCnProvider } from './workbuddy-cn/index.js'
 import { createBuddyIntlProvider } from './buddy-intl/index.js'
 import { createQoderProvider } from './qoder/index.js'
 import { QODER, QODER_CN } from './qoder/product.js'
@@ -31,8 +29,12 @@ export function registerProviders(
   options: RegisterOptions = {},
 ): RegisteredProviders {
   const captcha = options.captcha ?? new ZCodeCaptchaManager(options.fetcher ? { fetcher: options.fetcher } : {})
-  registry.register(createWorkBuddyProvider(options.fetcher))
-  registry.register(createWorkBuddyCnProvider(options.fetcher))
+  // workbuddy (international) + workbuddy-cn: migrated to the extension
+  // deployables (extensions/workbuddy and extensions/workbuddycn, installed
+  // via the Extension Manager) — verified against the real workbuddy.ai
+  // upstream on 2026-10-16. Shared buddy infrastructure stays in
+  // src/providers/shared/buddy for the extension builds and remaining
+  // built-in buddy products (codebuddy / buddy-intl).
   registry.register(createCodeBuddyProvider(options.fetcher))
   registry.register(createBuddyIntlProvider(options.fetcher))
   // lobsterai: migrated to the extension deployable (src/extensions/lobsterai,

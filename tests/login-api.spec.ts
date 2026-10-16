@@ -64,106 +64,23 @@ describe('provider registration', () => {
     expect(res.status).toBe(200)
     const body = (await res.json()) as { providers: Array<{ id: string }> }
     const ids = body.providers.map((p) => p.id).sort()
+    // workbuddy / workbuddy-cn are provided by extension deployables via the
+    // Extension Manager (extensions/workbuddy, extensions/workbuddycn) — not
+    // built-in anymore. Their protocol surfaces are covered by the extension
+    // test suites (extensions/*/test) and the buddy-family specs.
     expect(ids).toEqual([
       'buddy-intl', 'codebuddy',
-      'qoder', 'qoder-cn', 'workbuddy', 'workbuddy-cn', 'zcode',
+      'qoder', 'qoder-cn', 'zcode',
     ])
   })
 })
 
-describe('POST /api/accounts/:provider/login', () => {
-  it('starts a WorkBuddy login and returns the authorization URL', async () => {
-    const fetcher = fetcherFor([
-      { match: '/v2/plugin/auth/state', json: { code: 0, data: { state: 'st', authUrl: 'https://www.workbuddy.ai/auth?state=st' } } },
-    ])
-    const { app } = setup(fetcher)
+describe('workbuddy providers via extension (post-migration)', () => {
+  it('login API returns 404/503 for the migrated workbuddy provider (now extension-provided)', async () => {
+    const { app } = setup()
     const res = await app.request('/api/accounts/workbuddy/login', { method: 'POST', headers: admin(), body: '{}' })
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as { login_id: string; status: string; authorization_url: string; poll_interval: number }
-    expect(body.status).toBe('pending')
-    expect(body.login_id).toMatch(/^workbuddy-/)
-    expect(body.authorization_url).toContain('workbuddy.ai/auth')
-    expect(body.poll_interval).toBeGreaterThan(0)
-  })
-
-  it('completes a WorkBuddy login, persists the credential and syncs models', async () => {
-    const fetcher = fetcherFor([
-      { match: '/v2/plugin/auth/state', json: { code: 0, data: { state: 'st', authUrl: 'https://a' } } },
-      { match: '/v2/plugin/auth/token', json: { code: 0, data: { accessToken: 'at', refreshToken: 'rt', expiresIn: 3600 } } },
-      { match: '/v2/plugin/login/account', json: { code: 0, data: { uid: 'u7', type: 'personal' } } },
-      { match: '/v3/config', json: { data: { models: [{ id: 'glm-5.3', name: 'GLM-5.3' }] } } },
-    ])
-    const { app, store } = setup(fetcher)
-    const begun = (await (await app.request('/api/accounts/workbuddy/login', { method: 'POST', headers: admin(), body: '{}' })).json()) as { login_id: string }
-
-    const poll = await app.request(`/api/accounts/workbuddy/login/${begun.login_id}`, { headers: admin() })
-    const body = (await poll.json()) as { status: string; models_synced: number; account: Record<string, unknown> }
-    expect(body.status).toBe('success')
-    expect(body.models_synced).toBe(1)
-
-    // the credential is encrypted at rest and reachable via the store
-    const stored = store.getAccount(begun.login_id)
-    expect(stored?.credential).toBeTruthy()
-    const decrypted = new CredentialCipher('0123456789abcdef').decryptJson<{ access_token: string }>(stored!.credential!)
-    expect(decrypted.access_token).toBe('at')
-
-    // the poll response must never leak secret material
-    const serialized = JSON.stringify(body)
-    expect(serialized).not.toContain('access_token')
-    expect(serialized).not.toContain('refresh_token')
-    expect(serialized).not.toContain('rt')
-
-    // models become visible
-    const models = (await (await app.request('/v1/models', { headers: { Authorization: 'Bearer gw-key-123' } })).json()) as { data: Array<{ id: string }> }
-    expect(models.data.map((m) => m.id)).toContain('workbuddy::glm-5.3')
-  })
-
-  it('starts a ZCode login (OAuth URL)', async () => {
-    const fetcher = fetcherFor([
-      { match: '/oauth/cli/init', json: { data: { flow_id: 'f', authorize_url: 'https://zcode.z.ai/authorize' } } },
-    ])
-    const { app } = setup(fetcher)
-    const res = await app.request('/api/accounts/zcode/login', { method: 'POST', headers: admin(), body: '{}' })
-    const body = (await res.json()) as { authorization_url: string; login_id: string }
-    expect(body.authorization_url).toContain('zcode.z.ai/authorize')
-    expect(body.login_id).toMatch(/^zcode-/)
-  })
-
-  it('404s for an unknown provider', async () => {
-    const { app } = setup()
-    const res = await app.request('/api/accounts/nope/login', { method: 'POST', headers: admin(), body: '{}' })
-    expect(res.status).toBe(404)
-  })
-
-  it('requires the admin token', async () => {
-    const { app } = setup()
-    const res = await app.request('/api/accounts/workbuddy/login', { method: 'POST', body: '{}' })
-    expect(res.status).toBe(401)
-  })
-})
-
-describe('POST /api/accounts/:provider/captcha', () => {
-  it('accepts a ZCode captcha token', async () => {
-    const { app, captcha } = setup()
-    const res = await app.request('/api/accounts/zcode/captcha', {
-      method: 'POST', headers: admin(), body: JSON.stringify({ verify_param: 'verify-abc' }),
-    })
-    expect(res.status).toBe(200)
-    expect((await res.json()) as { ok: boolean }).toMatchObject({ ok: true })
-    expect(captcha.peek()).toBe('verify-abc')
-  })
-
-  it('rejects an empty token', async () => {
-    const { app } = setup()
-    const res = await app.request('/api/accounts/zcode/captcha', { method: 'POST', headers: admin(), body: '{}' })
-    expect(res.status).toBe(400)
-  })
-
-  it('rejects providers that do not use a captcha', async () => {
-    const { app } = setup()
-    const res = await app.request('/api/accounts/workbuddy/captcha', {
-      method: 'POST', headers: admin(), body: JSON.stringify({ verify_param: 'x' }),
-    })
-    expect(res.status).toBe(400)
+    // The in-process adapter is gone; the provider arrives via the Extension
+    // Manager (remote registration). Core's login API must NOT fake a flow.
+    expect([404, 503]).toContain(res.status)
   })
 })
