@@ -410,7 +410,11 @@ export class RemoteProvider implements Provider {
       async getQuota(_ctx: ProviderCtx, account: Account): Promise<QuotaSnapshot> {
         const v1 = await client.accountQuota(account.id)
         const legacy = quotaSnapshotV1ToLegacy(v1)
-        return { ...legacy, lastUpdatedAt: Date.now(), rawJson: null }
+        // Preserve the full multi-resource snapshot for the Console: the legacy
+        // projection only keeps the scarcest resource, while rawJson carries
+        // every resource line (ids, units, statuses, metadata) for display.
+        const rawJson = v1.resources.length > 0 ? JSON.stringify(v1) : null
+        return { ...legacy, lastUpdatedAt: Date.now(), rawJson }
       },
       async claimCredits(_ctx: ProviderCtx, account: Account): Promise<ClaimOutcome> {
         const res = await client.claimCredit(account.id)

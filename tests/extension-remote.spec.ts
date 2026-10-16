@@ -311,5 +311,39 @@ describe('RemoteProvider ops — claim and quota over the extension protocol', (
     })
     const quota = await provider.ops.getQuota!(undefined as never, account('acc-9'))
     expect(quota).toMatchObject({ known: true, remaining: 12.5, total: 100 })
+    // The full multi-resource snapshot is preserved for the Console (rawJson);
+    // the legacy fields stay the scarcest-resource projection.
+    expect(quota.rawJson).not.toBeNull()
+    const raw = JSON.parse(quota.rawJson!) as { resources: Array<{ id: string; remaining: number }> }
+    expect(raw.resources).toHaveLength(1)
+    expect(raw.resources[0]).toMatchObject({ id: 'credits', remaining: 12.5 })
+  })
+
+  it('getQuota with no resources yields rawJson null (no invented data)', async () => {
+    const routes = stubFetch(new Map<string, (init?: RequestInit) => Response>([
+      [`${endpoints.baseUrl}/v1/accounts/acc-empty/quota`, () => json({
+        accountId: 'acc-empty', resources: [], checkedAt: new Date().toISOString(), source: 'authoritative',
+      })],
+    ]))
+    const [provider] = buildRemoteProviders({
+      manifest: structuredClone(buddyManifestFixture),
+      endpoints,
+      fetch: routes,
+    })
+    const quota = await provider.ops.getQuota!(undefined as never, account('acc-empty'))
+    expect(quota).toMatchObject({ known: false, remaining: null, total: null })
+    expect(quota.rawJson).toBeNull()
+  })
+
+  it('getQuota propagates upstream failures (no fabricated snapshot)', async () => {
+    const routes = stubFetch(new Map<string, (init?: RequestInit) => Response>([
+      [`${endpoints.baseUrl}/v1/accounts/acc-x/quota`, () => new Response('boom', { status: 500 })],
+    ]))
+    const [provider] = buildRemoteProviders({
+      manifest: structuredClone(buddyManifestFixture),
+      endpoints,
+      fetch: routes,
+    })
+    await expect(provider.ops.getQuota!(undefined as never, account('acc-x'))).rejects.toMatchObject({ kind: 'TRANSPORT' })
   })
 })
