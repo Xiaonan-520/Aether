@@ -136,9 +136,17 @@ function contentToText(content: unknown): string {
 }
 
 function buildBody(req: ExtensionChatRequest): string {
+  // Upstream contract (workbuddy.ai, verified 2026-10-16): the first message
+  // MUST be a system prompt — otherwise the request is rejected with
+  // code 11128 'first message is not system prompt'. Inject a neutral default
+  // when the caller omits one (OpenAI clients commonly do).
+  const messages: ExtensionChatRequest['messages'] =
+    req.messages.length === 0 || req.messages[0]?.role !== 'system'
+      ? [{ role: 'system', content: 'You are a helpful assistant.' }, ...req.messages]
+      : req.messages
   const body: Record<string, unknown> = {
     model: req.model,
-    messages: serializeMessages(req.messages),
+    messages: serializeMessages(messages),
     stream: true,
   }
   if (req.requestId) body.prompt_cache_key = req.requestId
