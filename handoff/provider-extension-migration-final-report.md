@@ -78,3 +78,21 @@ a110e18 feat(ext): migrate cline provider to an extension (batch 3)
 2. qoder WASM 卷方案是否排期。
 3. zcode captcha Action 协议演进的排期。
 4. Phase 3 裸模型行清理执行窗口（方案已备）。
+
+---
+
+## 批次6：codebuddy + buddy-intl（2026-10-16，commit 7a31c6a）
+
+- **实现**：`src/extensions/codebuddy/`（main.ts + credential-store.ts + Dockerfile）——单镜像双产品（`CODEBUDDY_PRODUCT=codebuddy|buddy-intl`），沿用 TRAE 扩展的成熟模式。协议原语逐字复用 `src/providers/shared/buddy/*`（workbuddy 两个扩展同样依赖），零新增上游行为、零 Core 特例。
+- **覆盖面**：external-link 轮询登录（auth/state → auth/token → login/account）、轮换式静默刷新、/v3/config 模型发现、OpenAI 聊天（上游仅 SSE，非流式客户端聚合；11128 前导 system 守卫）、诚实空额度快照（buddy meter 无可读余额，声明 `quotaResources: []` 不伪造）、单次签到领取（先读权威状态）、enable/disable、§10.3 凭据红线（AES-GCM 卷内存储，协议载荷无凭据）。
+- **注册表**：内置 5 → **3**（qoder×2 + zcode，带文档化阻塞项）。login-api.spec 更新为迁移后守卫（buddy 族登录 API 不再伪装流程）。
+- **测试**：新增 32 E2E（双产品 × 全协议面，含 Core RemoteProvider seam + marker credential）；Core 全量 **677 passed | 2 skipped**；typecheck 0 error；镜像构建并实机验证（built-ins 输出与 intl manifest 产品 id 正确）。
+- **未部署**：Core/扩展镜像均为本地构建，本轮按约束未做任何部署/重启。
+
+### 剩余迁移清单（更新后）
+| Provider | 阻塞项 | 性质 |
+|---|---|---|
+| qoder / qoder-cn | 专有 WASM 二进制不入镜像（合规红线） | RFC §24.7 卷挂载方案落地后可迁 |
+| zcode | captcha 人工交互是 Core HTTP 层特判（服务端渲染 HTML） | 需 §16 交互式 Action 协议演进 |
+
+两者均为协议演进项，非单纯迁移；共享 buddy 基础设施（`src/providers/shared/buddy/`）保留——三个 buddy 族扩展与内置 qoder/zcode 目录仍被引用。
