@@ -118,6 +118,32 @@ function codebuddyManifestFor(product: BuddyProduct, extensionId?: string): Exte
         // family; declaring nothing is the honest statement. getQuota still
         // returns an empty snapshot rather than inventing numbers.
         quotaResources: [],
+        // Read-only action surface (conformance manual-actions domain):
+        // check-in activity status — no side effects, no credential egress.
+        actions: [
+          {
+            id: 'checkin-status',
+            httpMethod: 'POST',
+            title: 'Read check-in activity status',
+            mode: 'read',
+            sideEffects: 'none',
+            ui: 'none',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                account_id: { type: 'string' },
+              },
+            },
+            outputSchema: {
+              type: 'object',
+              properties: {
+                active: { type: 'boolean' },
+                todayCheckedIn: { type: 'boolean' },
+                streakDays: { type: 'number' },
+              },
+            },
+          },
+        ],
       },
     ],
   }
@@ -430,6 +456,16 @@ export async function startCodeBuddyExtension(opts: CodeBuddyExtensionOptions = 
         const status = !accepted ? 'unknown' : !rec!.enabled ? 'disabled' : expired(accountId) ? 'auth_failed' : 'active'
         return send(res, 200, { accountId, accepted, status })
       }
+    }
+
+    if (req.method === 'POST' && path === '/v1/actions/checkin-status') {
+      const body = await readJson(req) as { payload?: { account_id?: unknown } } | undefined
+      const payload = (body?.payload ?? {}) as Record<string, unknown>
+      const accountId = typeof payload.account_id === 'string' ? payload.account_id : store.list()[0]?.accountId ?? ''
+      const credential = store.get(accountId)
+      if (!credential) return send(res, 200, { result: { active: false, todayCheckedIn: false, streakDays: 0, error: 'no credential' } })
+      const status = await fetchCheckinStatus(product, credential, fetcher)
+      return send(res, 200, { result: status ? { active: status.active, todayCheckedIn: status.todayCheckedIn, streakDays: status.streakDays } : { active: false, todayCheckedIn: false, streakDays: 0, error: 'status unavailable' } })
     }
 
     if (req.method === 'POST' && path === '/v1/chat') {

@@ -285,6 +285,13 @@ for (const [label, product] of [['codebuddy (mainland)', CODEBUDDY], ['buddy-int
         }
       })
 
+      it('serves the declared read-only checkin-status action', async () => {
+        await provisionActiveAccount(ext, product.id)
+        const { status, json } = await post(ext, '/v1/actions/checkin-status', { payload: { account_id: 'acc-c1' } })
+        expect(status).toBe(200)
+        expect(json.result).toMatchObject({ active: true, todayCheckedIn: false })
+      })
+
       it('disable/enable flips the account projection', async () => {
         await provisionActiveAccount(ext, product.id)
         const off = await post(ext, '/v1/accounts/acc-c1/disable')
