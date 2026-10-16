@@ -75,11 +75,26 @@ const capabilitiesSchema = z.object({
   protocol: z.enum(['openai-chat', 'anthropic-messages']),
 }).strict()
 
+/** Declarative quota contract (§13.1) — see QuotaResourceDeclaration. */
+const quotaResourceDeclSchema = z.object({
+  id: z.string().min(1),
+  kind: z.enum(['credits', 'tokens', 'requests', 'subscription', 'custom']),
+  unit: z.string().min(1).optional(),
+  displayName: z.string().min(1).optional(),
+  fields: z.object({
+    remaining: z.boolean().optional(),
+    total: z.boolean().optional(),
+    used: z.boolean().optional(),
+    resetAt: z.boolean().optional(),
+  }).optional(),
+}).strict()
+
 const providerEntrySchema = z.object({
   id: z.string().regex(identifierRe, 'provider.id must match [a-z0-9-]'),
   displayName: z.string().min(1),
   protocol: z.string().min(1),
   capabilities: capabilitiesSchema,
+  quotaResources: z.array(quotaResourceDeclSchema).optional(),
   fallbackModels: z.array(z.object({
     id: z.string().min(1),
     name: z.string().min(1),

@@ -41,6 +41,8 @@ import { UpstreamError } from '../../core/errors/upstream-error.js'
 import { modelIdOf } from '../../core/naming.js'
 import { extensionErrorToUpstreamError, type ExtensionErrorBody } from './errors.js'
 import type { ExtensionManifest } from './manifest.js'
+import type { QuotaResourceDeclaration } from './accounts.js'
+import { validateQuotaSnapshotAgainstDeclaration } from './quota-contract.js'
 import { validateManifest } from './validate-manifest.js'
 import type {
   AccountDetailResponse,
@@ -320,7 +322,7 @@ export function buildRemoteProviders(reg: RemoteProviderRegistration): Provider[
     throw new Error(`invalid extension manifest: ${detail}`)
   }
   const client = new RemoteExtensionClient({ endpoints: reg.endpoints, fetch: reg.fetch })
-  return reg.manifest.providers.map((entry) => new RemoteProvider(entry.id, entry.displayName, entry.capabilities, entry.authAction, client))
+  return reg.manifest.providers.map((entry) => new RemoteProvider(entry.id, entry.displayName, entry.capabilities, entry.authAction, client, entry.quotaResources))
 }
 
 /**
@@ -342,6 +344,7 @@ export class RemoteProvider implements Provider {
     capabilities: Provider['capabilities'],
     private readonly authActionId: string | undefined,
     private readonly client: RemoteExtensionClient,
+    private readonly quotaDeclaration: QuotaResourceDeclaration[] | undefined,
   ) {
     this.id = providerId
     this.displayName = displayName
@@ -408,6 +411,7 @@ export class RemoteProvider implements Provider {
     }
 
     // ------------------------------------------------------------------- ops
+    const declaredQuotaResources = this.quotaDeclaration ?? undefined
     this.ops = {
       async refreshAccount(_ctx: ProviderCtx, account: Account): Promise<RefreshResult> {
         const res = await client.refreshAccount(account.id)
@@ -415,6 +419,7 @@ export class RemoteProvider implements Provider {
       },
       async getQuota(_ctx: ProviderCtx, account: Account): Promise<QuotaSnapshot> {
         const v1 = await client.accountQuota(account.id)
+        validateQuotaSnapshotAgainstDeclaration(v1, providerId, declaredQuotaResources)
         const legacy = quotaSnapshotV1ToLegacy(v1)
         // Preserve the full multi-resource snapshot for the Console: the legacy
         // projection only keeps the scarcest resource, while rawJson carries

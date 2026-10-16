@@ -235,6 +235,14 @@ export interface ProviderManifestEntry {
   displayName: string
   protocol: string
   capabilities: ProviderCapabilities
+  /** Declarative quota contract (§13.1) — mirrors the Core-side type. */
+  quotaResources?: Array<{
+    id: string
+    kind: 'credits' | 'tokens' | 'requests' | 'subscription' | 'custom'
+    unit?: string
+    displayName?: string
+    fields?: { remaining?: boolean; total?: boolean; used?: boolean; resetAt?: boolean }
+  }>
   fallbackModels?: ProviderModelDeclaration[]
   actions?: ActionDeclaration[]
   authAction?: string

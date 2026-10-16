@@ -7,6 +7,8 @@ import type { ServiceContext } from './context.js'
 import { OpenAIApiError } from '../protocol/openai/parse.js'
 import { ModelService } from './model-service.js'
 import { dayKey } from '../store/memory-store.js'
+import { quotaSnapshotV1ToLegacy } from '../protocol/extension/remote-provider.js'
+import type { QuotaSnapshotV1 } from '../protocol/extension/accounts.js'
 
 /** The provider's quota snapshot as stored on the account (rawJson preserved). */
 export interface QuotaResource {
@@ -102,23 +104,43 @@ export class ConsoleService {
     const models = this.ctx.store.listModels().filter((m) => m.provider === id)
 
     const quotas: QuotaResource[] = accounts.map((a) => {
-      let parsed: { known?: boolean; remaining?: number | null; total?: number | null; resetAt?: number | null } | null = null
+      // quotaJson holds a QuotaSnapshotV1 (multi-resource, §13). Parse the
+      // structured contract — never guess semantics from raw JSON, never
+      // coerce missing numbers to 0. The "scarcest routable resource"
+      // projection mirrors quotaSnapshotV1ToLegacy so the Console card shows
+      // the binding constraint; full resource lines stay in `raw`.
+      let snapshot: QuotaSnapshotV1 | null = null
+      let legacy: { known?: boolean; remaining?: number | null; total?: number | null; resetAt?: number | null } | null = null
       if (a.quotaJson) {
         try {
-          parsed = JSON.parse(a.quotaJson)
+          const parsed = JSON.parse(a.quotaJson) as unknown
+          if (parsed && typeof parsed === 'object' && Array.isArray((parsed as QuotaSnapshotV1).resources)) {
+            snapshot = parsed as QuotaSnapshotV1
+            const projected = quotaSnapshotV1ToLegacy(snapshot)
+            legacy = {
+              known: projected.known,
+              remaining: projected.remaining,
+              total: projected.total,
+              resetAt: projected.resetAt,
+            }
+          } else {
+            // Legacy shape written by older Cores ({known, remaining, ...}).
+            legacy = parsed as typeof legacy
+          }
         } catch {
-          parsed = null
+          legacy = null
         }
       }
       return {
         accountId: a.id,
         accountDisplayName: a.displayName,
-        known: parsed?.known ?? false,
-        remaining: parsed?.remaining ?? null,
-        total: parsed?.total ?? null,
-        resetAt: parsed?.resetAt ?? null,
+        known: legacy?.known ?? false,
+        remaining: legacy?.remaining ?? null,
+        total: legacy?.total ?? null,
+        resetAt: legacy?.resetAt ?? null,
         lastUpdatedAt: a.lastQuotaAt,
-        raw: parsed ?? null,
+        // Full structured payload (resources[]) for the detail view.
+        raw: snapshot ?? legacy ?? null,
       }
     })
 

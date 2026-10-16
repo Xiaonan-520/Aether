@@ -34,6 +34,31 @@ export type QuotaResourceKind = 'credits' | 'tokens' | 'requests' | 'subscriptio
 export type QuotaResourceStatus =
   | 'ok' | 'low' | 'exhausted' | 'reset_pending' | 'unclaimable' | 'unknown'
 
+/**
+ * Declarative quota contract (manifest-level, §13.1). An extension declares
+ * WHICH resources it reports and their field semantics; Core validates live
+ * snapshots against the declaration and the UI renders by kind+unit without
+ * provider-specific code. All fields are optional except id/kind — providers
+ * differ in what upstream exposes, and missing data must stay missing (never
+ * coerced to 0 or guessed from raw JSON).
+ */
+export interface QuotaResourceDeclaration {
+  /** stable id inside the extension's namespace; must match snapshot entries */
+  id: string
+  kind: QuotaResourceKind
+  /** semantic unit declared by the extension, e.g. "credits" | "USD" */
+  unit?: string
+  /** human-facing display name, e.g. "Bonus credits" */
+  displayName?: string
+  /** which numeric fields the upstream actually exposes */
+  fields?: {
+    remaining?: boolean
+    total?: boolean
+    used?: boolean
+    resetAt?: boolean
+  }
+}
+
 export interface QuotaResource {
   /** stable id inside the extension's namespace, e.g. "gift_credits" */
   id: string

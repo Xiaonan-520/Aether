@@ -15,6 +15,7 @@
  */
 
 import type { AccountStatus, ProviderCapabilities } from '../../core/types.js'
+import type { QuotaResourceDeclaration } from './accounts.js'
 import type { UpstreamErrorKind } from '../../core/errors/upstream-error.js'
 import type { AccountId, ExtensionId, ModelId, ProviderId } from './namespace.js'
 
@@ -137,6 +138,14 @@ export interface ProviderManifestEntry {
   displayName: string
   protocol: 'openai-chat' | 'anthropic-messages' | string
   capabilities: ProviderCapabilities
+  /**
+   * Declarative quota contract (§13.1): which resources this provider reports
+   * and their field semantics. Optional — a provider without quota support
+   * omits it and Core shows "unknown"/"not supported" as appropriate. Core
+   * validates live snapshots against this declaration (unknown resource ids
+   * are surfaced, never silently rendered).
+   */
+  quotaResources?: QuotaResourceDeclaration[]
   /** static seed models merged into the Core model registry (§9) */
   fallbackModels?: ProviderModelDeclaration[]
   /** interactive actions exposed through the Core admin proxy (§16) */

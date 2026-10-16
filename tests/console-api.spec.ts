@@ -208,6 +208,67 @@ describe('console API — models / quotas / claims', () => {
     expect(withData.raw.raw).toEqual({ used: 58 })
   })
 
+  it('parses a structured QuotaSnapshotV1 (resources[]) into the legacy projection — the workbuddy/workbuddycn real-data fix', async () => {
+    const { app, store } = setup()
+    const s = store.listAccounts('mock')[0]!
+    // Exactly what the extension protocol stores post-fix: a multi-resource V1
+    // snapshot (this shape previously rendered as known:false / "unknown" in
+    // the Console because the parser expected the legacy fields).
+    store.patchAccount(s.account.id, {
+      quotaJson: JSON.stringify({
+        accountId: s.account.id,
+        resources: [{
+          id: 'credits', kind: 'credits', remaining: 84.15, total: 84.15,
+          used: 0, unit: 'credits', resetAt: '2026-10-31T15:59:59.000Z', status: 'ok',
+        }],
+        checkedAt: new Date().toISOString(), source: 'authoritative',
+      }),
+      lastQuotaAt: 1_700_000_000_000,
+    })
+    const res = await app.request('/api/console/providers/mock/quotas', {
+      headers: { Authorization: ADMIN },
+    })
+    const body = await res.json()
+    const q = body.quotas.find((x: { accountId: string }) => x.accountId === s.account.id)
+    expect(q).toMatchObject({ known: true, remaining: 84.15, total: 84.15, resetAt: Date.parse('2026-10-31T15:59:59.000Z') })
+    // raw keeps the full structured resources[] for the detail view
+    expect(q.raw.resources).toHaveLength(1)
+    expect(q.raw.resources[0]).toMatchObject({ id: 'credits', remaining: 84.15, unit: 'credits' })
+  })
+
+  it('V1 snapshot with empty resources stays known:false (no invented numbers)', async () => {
+    const { app, store } = setup()
+    const s = store.listAccounts('mock')[0]!
+    store.patchAccount(s.account.id, {
+      quotaJson: JSON.stringify({ accountId: s.account.id, resources: [], checkedAt: new Date().toISOString(), source: 'authoritative' }),
+      lastQuotaAt: 1_700_000_000_000,
+    })
+    const body = await (await app.request('/api/console/providers/mock/quotas', { headers: { Authorization: ADMIN } })).json()
+    const q = body.quotas.find((x: { accountId: string }) => x.accountId === s.account.id)
+    expect(q).toMatchObject({ known: false, remaining: null, total: null })
+  })
+
+  it('V1 snapshot with multiple resources projects the scarcest (binding constraint)', async () => {
+    const { app, store } = setup()
+    const s = store.listAccounts('mock')[0]!
+    store.patchAccount(s.account.id, {
+      quotaJson: JSON.stringify({
+        accountId: s.account.id,
+        resources: [
+          { id: 'credits', kind: 'credits', remaining: 500, total: 1000, used: 500, unit: 'credits', resetAt: null, status: 'ok' },
+          { id: 'fast_requests', kind: 'requests', remaining: 3, total: 50, used: 47, unit: 'requests', resetAt: '2026-11-01T00:00:00Z', status: 'low' },
+        ],
+        checkedAt: new Date().toISOString(), source: 'authoritative',
+      }),
+      lastQuotaAt: 1_700_000_000_000,
+    })
+    const body = await (await app.request('/api/console/providers/mock/quotas', { headers: { Authorization: ADMIN } })).json()
+    const q = body.quotas.find((x: { accountId: string }) => x.accountId === s.account.id)
+    // scarcest by ratio: 3/50 requests, not 500/1000 credits
+    expect(q).toMatchObject({ known: true, remaining: 3, total: 50 })
+    expect(q.raw.resources).toHaveLength(2)
+  })
+
   it('lists claim jobs for the provider', async () => {
     const { app, store } = setup()
     store.createJob({

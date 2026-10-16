@@ -83,6 +83,15 @@ export const MANIFEST: ExtensionManifest = {
       id: PROVIDER_ID,
       displayName: 'WorkBuddy (International)',
       protocol: 'openai-chat',
+      quotaResources: [
+        {
+          id: 'credits',
+          kind: 'credits',
+          unit: 'credits',
+          displayName: 'Bonus credits',
+          fields: { remaining: true, total: true, resetAt: true },
+        },
+      ],
       capabilities: {
         supportsOAuth: true,
         supportsRefreshToken: true,
