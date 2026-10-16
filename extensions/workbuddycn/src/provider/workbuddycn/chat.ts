@@ -45,29 +45,85 @@ const MAX_OUTPUT_TOKENS: Readonly<Record<string, number>> = {
   'minimax-m3': 64_000,
 }
 
-function serializeMessages(messages: ExtensionChatRequest['messages']): Array<Record<string, unknown>> {
+export function serializeMessages(messages: ExtensionChatRequest['messages']): Array<Record<string, unknown>> {
   const wire: Array<Record<string, unknown>> = []
+  const emittedToolCallIds = new Set<string>()
   for (const message of messages) {
     const role = message.role
     if (role === 'assistant') {
       const content = message.content
       const text = contentToText(content)
-      const toolCalls = message.tool_calls
+      // Core sends canonical camelCase (toolCalls); older OpenAI-style
+      // snake_case is accepted as a fallback for direct callers.
+      const toolCalls = (message as { toolCalls?: unknown; tool_calls?: unknown }).toolCalls
+        ?? (message as { tool_calls?: unknown }).tool_calls
       const entry: Record<string, unknown> = {
         role: 'assistant',
         content: toolCalls && text === '' ? null : text,
       }
       // Reasoning models require the field to be present (upstream 400 otherwise).
       entry.reasoning_content = typeof message.reasoning_content === 'string' ? message.reasoning_content : ''
-      if (toolCalls) entry.tool_calls = toolCalls
+      if (toolCalls) {
+        const calls = toOpenAiToolCalls(toolCalls)
+        if (calls.length > 0) {
+          entry.tool_calls = calls
+          for (const call of calls) if (call.id) emittedToolCallIds.add(call.id)
+        }
+      }
       wire.push(entry)
     } else if (role === 'tool') {
-      wire.push({ role: 'tool', tool_call_id: message.tool_call_id, content: message.content })
+      // Core sends canonical camelCase (toolCallId); snake_case as fallback.
+      const toolCallId = (message as { toolCallId?: unknown }).toolCallId
+        ?? (message as { tool_call_id?: unknown }).tool_call_id
+      // Orphan tool results (no matching preceding assistant tool_calls, or no
+      // id at all) make strict upstreams answer 400. Downgrade them to a user
+      // note so multi-turn tool flows survive instead of hard-failing.
+      if (typeof toolCallId !== 'string' || toolCallId.length === 0 || !emittedToolCallIds.has(toolCallId)) {
+        const text = contentToText(message.content)
+        wire.push({
+          role: 'user',
+          content: `[tool result${toolCallId ? ` for ${toolCallId}` : ''}] ${text}`.slice(0, 4000),
+        })
+      } else {
+        wire.push({ role: 'tool', tool_call_id: toolCallId, content: message.content })
+      }
     } else {
       wire.push({ role, content: message.content })
     }
   }
   return wire
+}
+
+/** Normalize canonical ToolCall[] / OpenAI tool_calls[] into upstream wire form. */
+function toOpenAiToolCalls(raw: unknown): Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> {
+  if (!Array.isArray(raw)) return []
+  const out: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const record = item as Record<string, unknown>
+    // Canonical shape: { id, name, arguments } (arguments may be object or string).
+    if (typeof record.name === 'string' && !('function' in record)) {
+      out.push({
+        id: typeof record.id === 'string' && record.id ? record.id : `call_${out.length}`,
+        type: 'function',
+        function: {
+          name: record.name,
+          arguments: typeof record.arguments === 'string' ? record.arguments : JSON.stringify(record.arguments ?? {}),
+        },
+      })
+      continue
+    }
+    // Already OpenAI-shaped: { type:'function', function:{name,arguments} }.
+    const fn = record.function as Record<string, unknown> | undefined
+    if (fn && typeof fn.name === 'string') {
+      out.push({
+        id: typeof record.id === 'string' && record.id ? record.id : `call_${out.length}`,
+        type: 'function',
+        function: { name: fn.name, arguments: typeof fn.arguments === 'string' ? fn.arguments : JSON.stringify(fn.arguments ?? {}) },
+      })
+    }
+  }
+  return out
 }
 
 function contentToText(content: unknown): string {
@@ -109,7 +165,7 @@ function normalizeTool(tool: unknown): unknown {
 }
 
 /** Map an upstream non-OK response to a ProtocolError (business codes first). */
-function upstreamError(status: number, bodyText: string): ProtocolError {
+export function upstreamError(status: number, bodyText: string): ProtocolError {
   const parsed = safeJson(bodyText)
   const code = parsed && typeof parsed.code === 'number' ? parsed.code : undefined
   const msg = parsed && typeof parsed.msg === 'string' ? parsed.msg
@@ -121,8 +177,50 @@ function upstreamError(status: number, bodyText: string): ProtocolError {
   if (status === 401 || status === 403) return errors.authInvalid(`upstream auth rejected (HTTP ${status})`, { httpStatus: status })
   if (status === 429) return errors.rateLimit('upstream rate limit', { httpStatus: 429, retryable: true })
   if (status >= 500) return errors.upstream5xx(`upstream HTTP ${status}`, { httpStatus: status })
-  if (status === 400) return errors.terminal('invalid chat request rejected by upstream', { httpStatus: 400 })
+  if (status === 400) {
+    // Diagnostic (1.0.4): surface the upstream's own rejection reason (sanitized
+    // summary only — never the raw body, never credential-shaped strings).
+    const summary = sanitizeUpstreamRejection(parsed, bodyText)
+    return errors.terminal(`invalid chat request rejected by upstream${summary ? `: ${summary}` : ''}`, {
+      httpStatus: 400,
+      ...(summary ? { detail: { upstreamSummary: summary } } : {}),
+    })
+  }
   return errors.terminal(`upstream HTTP ${status}`, { httpStatus: status })
+}
+
+/**
+ * Build a short, credential-free summary of an upstream 4xx body for logging
+ * and error propagation. Keeps only the upstream's own code/msg fields,
+ * truncates, and strips anything that looks like a token/secret.
+ */
+export function sanitizeUpstreamRejection(
+  parsed: Record<string, unknown> | undefined,
+  bodyText: string,
+): string {
+  const parts: string[] = []
+  if (parsed) {
+    if (typeof parsed.code === 'number' || typeof parsed.code === 'string') parts.push(`code=${String(parsed.code).slice(0, 40)}`)
+    const msg = typeof parsed.msg === 'string' ? parsed.msg
+      : typeof parsed.message === 'string' ? parsed.message
+        : typeof parsed.error === 'object' && parsed.error !== null && typeof (parsed.error as Record<string, unknown>).message === 'string'
+          ? (parsed.error as { message: string }).message
+          : ''
+    if (msg) parts.push(`msg=${msg.slice(0, 200)}`)
+  }
+  if (parts.length === 0 && bodyText) {
+    // Non-JSON body: keep a bounded, redacted excerpt so the shape is visible.
+    parts.push(`body=${redactSecrets(bodyText).slice(0, 160)}`)
+  }
+  return redactSecrets(parts.join(' ')).slice(0, 240)
+}
+
+/** Strip anything resembling a bearer token / key / secret from free text. */
+function redactSecrets(text: string): string {
+  return text
+    .replace(/[A-Za-z0-9_-]{24,}\.[A-Za-z0-9_-]{8,}/g, '<redacted>')
+    .replace(/(token|key|secret|authorization|cookie)\s*[:=]\s*\S+/gi, '$1=<redacted>')
+    .replace(/sk-[A-Za-z0-9]+/g, '<redacted>')
 }
 
 function safeJson(text: string): Record<string, unknown> | undefined {
