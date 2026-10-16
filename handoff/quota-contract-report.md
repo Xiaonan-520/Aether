@@ -60,3 +60,29 @@
 | 旧（无声明） | 快照照常显示（legacy 兼容路径），带 missing-declaration 备注 |
 | 新（有声明） | 逐快照契约校验，issues 记录，UI 正常渲染 |
 | 快照为空/上游失败 | known:false / 保留上次缓存，绝不伪造 0 |
+
+---
+
+## 方案 B 部署记录（2026-10-16，授权后执行）
+
+### 部署顺序（含一次纠错）
+1. 扩展 bump：workbuddycn 1.0.4→**1.0.5**、workbuddy 1.0.1→**1.0.2**（manifest 声明），镜像重建并验证（decl: credits）
+2. ⚠️ **首次扩展升级被拒**（预期行为）：Manager 1.2.2 的 manifest 校验不认识 `quotaResources` → "Unrecognized key(s)"，且回滚失败（digest mismatch，本地重建镜像无 registry digest）。**教训：契约变更必须先升 Core。**
+3. Core+Manager 先升 **1.2.3** → 两扩展再各一次 upgrade 成功（200），自动重注册生效，无 token mismatch
+4. 全程无数据/凭据删除；CN 账户凭据保留、账户 active
+
+### 部署后验证（真实数据）
+| 项 | 结果 |
+|---|---|
+| 版本 | Core/Manager **1.2.3**、workbuddycn **1.0.5**、workbuddy **1.0.2**，全部 healthy |
+| Console Credit（无需展开 raw） | workbuddy: known=true **84.14** credits（reset 2026-10-31）；workbuddycn: known=true **2543.17** credits —— 主卡片直接可见 |
+| rawJson 保留 | 两账户 raw.resources 各 1 行（完整结构供详情视图） |
+| 声明式契约 | 两扩展 manifest 携带 quotaResources；镜像内验证 decl=credits |
+| 国际版端到端 | glm-5.3 聊天 200 "ok"；流式 26 帧 |
+| CN 回归 | deepseek-v4.1-flash 聊天 200 "ok"；升级期间无 chat.fail/token mismatch |
+| 临时验证 Key | intl-verify-temp2 / deploy-b-verify 均已撤销 |
+| 生产 ai-gateway | Up 2 weeks（未触碰）；扩展日志 0 error |
+
+### 已知现象（非缺陷）
+- intl 余额 84.15→84.14：本轮验证聊天消耗，实时数据正常。
+- 升级期间 CN 短暂不可用（升级自动重注册窗口约 10 秒），无可观察 chat.fail。
