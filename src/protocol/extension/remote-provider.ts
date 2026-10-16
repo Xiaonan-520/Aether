@@ -365,11 +365,17 @@ export class RemoteProvider implements Provider {
         }
       },
       // Polling of a remote login is served by re-reading the account detail;
-      // the extension advances its own login state machine.
+      // the extension advances its own login state machine. On success we hand
+      // back a NON-SECRET marker credential so Core's pool `hasCredential`
+      // predicate (which reads the credentials table) sees the account as
+      // provisioned — the real tokens live only in the extension's encrypted
+      // volume (RFC §10.3); this marker never contains any of them.
       async pollLogin(accountId: string): Promise<PollLoginResult> {
         const res = await client.accountDetail(accountId)
         const a = res.account
-        if (a.status === 'active') return { done: true, success: true }
+        if (a.status === 'active') {
+          return { done: true, success: true, credential: { storedInExtension: true } }
+        }
         if (a.status === 'auth_failed') return { done: true, success: false, error: a.lastError ?? 'auth failed' }
         return { done: false }
       },
