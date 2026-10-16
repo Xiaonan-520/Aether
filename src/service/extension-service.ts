@@ -55,6 +55,8 @@ export class ExtensionService {
   private readonly ctx: () => Pick<ServiceContext, 'store' | 'registry'>
   private readonly endpoint: ManagerEndpoint
   private readonly probeCache = new Map<string, { at: number; runtime: RuntimeState; health: HealthState }>()
+  /** Per-extension lifecycle serialization (upgrade vs upgrade/reload races). */
+  private readonly lifecycleLocks = new Set<string>()
 
   constructor(opts: {
     endpoint: ManagerEndpoint
@@ -170,10 +172,35 @@ export class ExtensionService {
         `manifest extension id "${manifest?.extension?.id}" does not match path "${extensionId}"`)
     }
     this.assertTrustedSource(extensionId, body?.image, manifest)
+    // Serialize per-extension lifecycle: an in-flight upgrade for the same id
+    // (e.g. a double-clicked Console button or overlapping scripts) would
+    // otherwise race the post-upgrade re-registration below.
+    if (this.lifecycleLocks.has(extensionId)) {
+      throw new OpenAIApiError(409, 'invalid_request_error',
+        `extension "${extensionId}" is busy: upgrade in progress`, 'operation_in_progress')
+    }
+    this.lifecycleLocks.add(extensionId)
     try {
-      return await this.client.upgrade(extensionId, body)
+      const result = await this.client.upgrade(extensionId, body)
+      // Manager upgrade rotates the extension token. Core's in-memory remote
+      // providers still hold the previous token until remote bootstrap runs
+      // again — without this re-registration every chat 401s at the extension
+      // ('extension auth token mismatch'), the account parks as token_expired,
+      // and /v1/chat answers 503 'no available account for this model'.
+      try {
+        await registerRemoteExtensions(this.ctx(), this.endpoint, this.fetchImpl, { strict: true })
+      } catch (err) {
+        // Upgrade itself succeeded; surface a 503 that tells the operator the
+        // one-step recovery (reload) instead of silently leaving a stale token.
+        throw new OpenAIApiError(503, 'manager_unavailable',
+          `upgrade succeeded but Core re-registration failed (${err instanceof Error ? err.message : String(err)}); POST /api/console/extensions/${extensionId}/reload to recover`,
+          'manager_unavailable')
+      }
+      return result
     } catch (err) {
-      throw this.map(err)
+      throw err instanceof OpenAIApiError ? err : this.map(err)
+    } finally {
+      this.lifecycleLocks.delete(extensionId)
     }
   }
 
@@ -213,17 +240,27 @@ export class ExtensionService {
    */
   async reload(extensionId: string): Promise<{ ok: true; providers: string[] }> {
     assertExtensionId(extensionId)
+    if (this.lifecycleLocks.has(extensionId)) {
+      throw new OpenAIApiError(409, 'invalid_request_error',
+        `extension "${extensionId}" is busy: upgrade in progress`, 'operation_in_progress')
+    }
+    this.lifecycleLocks.add(extensionId)
     try {
       const detail = await this.client.get(extensionId)
       if (detail.status !== 'installed') {
         throw new OpenAIApiError(409, 'invalid_request_error',
           `extension "${extensionId}" is not installed (status=${detail.status})`, 'operation_in_progress')
       }
-      await registerRemoteExtensions(this.ctx(), this.endpoint)
+      // registerRemoteExtensions uses registry.replace() (idempotent by
+      // provider id), so an explicit reload right after an upgrade — or a
+      // retry of a failed post-upgrade registration — never double-mounts.
+      await registerRemoteExtensions(this.ctx(), this.endpoint, this.fetchImpl, { strict: true })
       const providers = Array.isArray(detail.providerIds) ? detail.providerIds : []
       return { ok: true, providers }
     } catch (err) {
       throw err instanceof OpenAIApiError ? err : this.map(err)
+    } finally {
+      this.lifecycleLocks.delete(extensionId)
     }
   }
 

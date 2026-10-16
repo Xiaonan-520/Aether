@@ -27,20 +27,35 @@ interface RegistrationPackageDto {
 }
 
 /** Returns the number of remote providers registered. */
+export interface RegisterRemoteOptions {
+  /**
+   * When true, a failed per-extension registration (unreachable manager,
+   * bad registration package) makes the whole call throw instead of being
+   * skipped with a warning. The post-upgrade re-registration path MUST use
+   * this — a silent skip would leave Core holding the pre-rotation token.
+   */
+  strict?: boolean
+}
+
 export async function registerRemoteExtensions(
   ctx: Pick<ServiceContext, 'store' | 'registry'>,
   endpoint: ManagerEndpoint,
+  fetchImpl: typeof fetch = fetch,
+  opts: RegisterRemoteOptions = {},
 ): Promise<number> {
   const headers = { authorization: `Bearer ${endpoint.managerToken}` }
-  const res = await fetch(`${endpoint.managerUrl}/api/extensions/available`, { headers })
+  const res = await fetchImpl(`${endpoint.managerUrl}/api/extensions/available`, { headers })
   if (!res.ok) throw new Error(`manager /available -> ${res.status}`)
   const { extensions } = await res.json() as { extensions: Array<{ extensionId: string; status: string }> }
   const installed = extensions.filter((e) => e.status === 'installed')
 
   let count = 0
+  /** Per-extension failure summaries surfaced to callers that need strictness
+   *  (post-upgrade re-registration must not silently keep a stale token). */
+  const failures: string[] = []
   for (const rec of installed) {
     try {
-      const regRes = await fetch(`${endpoint.managerUrl}/api/extensions/${rec.extensionId}/registration`, { headers })
+      const regRes = await fetchImpl(`${endpoint.managerUrl}/api/extensions/${rec.extensionId}/registration`, { headers })
       if (!regRes.ok) throw new Error(`/registration -> ${regRes.status}`)
       const pkg = await regRes.json() as RegistrationPackageDto
       const providers = buildRemoteProviders({
@@ -80,8 +95,13 @@ export async function registerRemoteExtensions(
         }
       }
     } catch (err) {
-      console.warn(`[extensions] registration of "${rec.extensionId}" skipped: ${err instanceof Error ? err.message : String(err)}`)
+      const message = err instanceof Error ? err.message : String(err)
+      failures.push(`${rec.extensionId}: ${message}`)
+      console.warn(`[extensions] registration of "${rec.extensionId}" skipped: ${message}`)
     }
+  }
+  if (opts.strict && failures.length > 0) {
+    throw new Error(`remote re-registration failed for: ${failures.join('; ')}`)
   }
   return count
 }

@@ -397,6 +397,125 @@ describe('extension service m0', () => {
     })
     await expect(svc.reload('fake')).rejects.toMatchObject({ status: 409 })
   })
+
+  // -- 1.0.4 follow-up: upgrade must re-register remote providers (token rotation) --
+
+  function bootstrapableStore(): { upsertProviders: (rows: unknown) => void; upsertModels: (rows: unknown) => void } {
+    return { upsertProviders: () => undefined, upsertModels: () => undefined }
+  }
+
+  function serviceWithStore(fetchImpl: typeof fetch): { svc: ExtensionService; registry: ProviderRegistry } {
+    const registry = new ProviderRegistry()
+    const svc = new ExtensionService({
+      endpoint: { managerUrl: 'http://manager.internal', managerToken: 't' },
+      ctx: () => ({ store: bootstrapableStore() as never, registry }),
+      fetchImpl,
+    })
+    return { svc, registry }
+  }
+
+  const regPkg = (): unknown => ({
+    endpointUrl: 'http://gw-ext-fake:8080',
+    token: 'rotated-token-123',
+    manifest: {
+      apiVersion: '1.0',
+      extension: { id: 'fake', version: '1.0.1', displayName: 'F', description: '', license: 'MIT' },
+      runtime: { port: 8080, healthPath: '/health', env: [], volumes: [] },
+      providers: [{
+        id: 'echo', displayName: 'Echo', protocol: 'openai-chat',
+        capabilities: { supportsOAuth: true, supportsRefreshToken: true, supportsQuota: false, supportsCredits: false, supportsStreaming: true, supportsVision: false, supportsToolCall: false, supportsMultipleAccounts: true, needsCaptcha: false, loginMode: 'oauth', protocol: 'openai-chat' },
+        fallbackModels: [{ id: 'm1', name: 'M1' }],
+      }],
+    },
+  })
+
+  it('upgrade auto-runs remote re-registration so the rotated token is used (regression: 503 no-available-account)', async () => {
+    const paths: string[] = []
+    const { svc, registry } = serviceWithStore(async (url, init) => {
+      const path = new URL(String(url)).pathname
+      paths.push(`${init?.method ?? 'GET'} ${path}`)
+      if (path === '/api/extensions/fake/upgrade' && init?.method === 'POST') return ok({ extensionId: 'fake', status: 'installed', version: '1.0.1' })
+      if (path === '/api/extensions/available') return ok({ extensions: [rec({ version: '1.0.1' })] })
+      if (path === '/api/extensions/fake/registration') return ok(regPkg())
+      return ok({ extensions: [] })
+    })
+    const result = await svc.upgrade('fake', { manifest: { extension: { id: 'fake', version: '1.0.1' } } })
+    expect(result).toMatchObject({ status: 'installed' })
+    // bootstrap pulled the registration package and mounted the provider
+    expect(paths).toContain('POST /api/extensions/fake/upgrade')
+    expect(paths).toContain('GET /api/extensions/available')
+    expect(paths).toContain('GET /api/extensions/fake/registration')
+    const mounted = registry.get('echo')
+    expect(mounted).not.toBeNull() // provider re-mounted in place
+  })
+
+  it('upgrade reports a 503 with reload hint when re-registration fails, upgrade itself already succeeded', async () => {
+    const { svc, registry } = serviceWithStore(async (url, init) => {
+      const path = new URL(String(url)).pathname
+      if (path === '/api/extensions/fake/upgrade' && init?.method === 'POST') return ok({ extensionId: 'fake', status: 'installed' })
+      if (path === '/api/extensions/available') return ok({ extensions: [rec()] })
+      if (path === '/api/extensions/fake/registration') return new Response('nope', { status: 500 })
+      return ok({ extensions: [] })
+    })
+    await expect(svc.upgrade('fake', { manifest: { extension: { id: 'fake', version: '1.0.1' } } }))
+      .rejects.toSatisfy((e: unknown) =>
+        e instanceof OpenAIApiError && (e as OpenAIApiError).status === 503
+        && (e as OpenAIApiError).message.includes('/reload'))
+  })
+
+  it('concurrent upgrades for the same extension are serialized (second gets 409)', async () => {
+    let upgradeCalls = 0
+    const { svc } = serviceWithStore(async (url, init) => {
+      const path = new URL(String(url)).pathname
+      if (path === '/api/extensions/fake/upgrade' && init?.method === 'POST') {
+        upgradeCalls++
+        await new Promise((r) => setTimeout(r, 30)) // hold the lock
+        return ok({ extensionId: 'fake', status: 'installed' })
+      }
+      if (path === '/api/extensions/available') return ok({ extensions: [] })
+      if (path === '/api/extensions/fake/registration') return ok(regPkg())
+      return ok({ extensions: [] })
+    })
+    const first = svc.upgrade('fake', { manifest: { extension: { id: 'fake', version: '1.0.1' } } })
+    // fire the second while the first still holds the lock
+    await new Promise((r) => setTimeout(r, 5))
+    await expect(svc.upgrade('fake', { manifest: { extension: { id: 'fake', version: '1.0.1' } } }))
+      .rejects.toSatisfy((e: unknown) => e instanceof OpenAIApiError && (e as OpenAIApiError).status === 409)
+    await first
+    expect(upgradeCalls).toBe(1)
+  })
+
+  it('failed upgrade (manager rejects) does not re-register and leaves state consistent', async () => {
+    const regCalls: string[] = []
+    const { svc } = serviceWithStore(async (url, init) => {
+      const path = new URL(String(url)).pathname
+      if (path === '/api/extensions/fake/upgrade' && init?.method === 'POST') return ok({ error: 'mismatch' }, 400)
+      if (path === '/api/extensions/fake/registration') regCalls.push(path)
+      return ok({ extensions: [] })
+    })
+    await expect(svc.upgrade('fake', { manifest: { extension: { id: 'fake', version: '1.0.1' } } }))
+      .rejects.toSatisfy((e: unknown) =>
+        e instanceof OpenAIApiError && (e as OpenAIApiError).code === 'manager_error')
+    expect(regCalls).toEqual([]) // no bootstrap attempt after a failed upgrade
+  })
+
+  it('reload after upgrade is idempotent: registry.replace() never double-mounts', async () => {
+    let regCount = 0
+    const { svc, registry } = serviceWithStore(async (url) => {
+      const path = new URL(String(url)).pathname
+      if (path === '/api/extensions/available') return ok({ extensions: [rec()] })
+      if (path === '/api/extensions/fake/registration') { regCount++; return ok(regPkg()) }
+      if (path === '/api/extensions/fake') return ok(rec())
+      return ok({ extensions: [] })
+    })
+    await svc.reload('fake')
+    await svc.reload('fake')
+    expect(regCount).toBe(2)
+    const mounted = registry.get('echo')
+    expect(mounted).not.toBeNull()
+    // exactly one instance mounted despite two bootstrap runs
+    expect(registry.list().filter((p) => p.id === 'echo')).toHaveLength(1)
+  })
 })
 
 function ok(body: unknown, status = 200): Response {
