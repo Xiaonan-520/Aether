@@ -44,7 +44,10 @@ const manager = new ExtensionManager({
   store: new ManagerStore(dbPath),
   runtime,
   network: process.env.GW_EXT_NETWORK ?? 'gw-ext-net',
-  operatorEnv: {},
+  // operator-supplied env for manifest-allowlisted keys (e.g. the CodeBuddy
+  // extension's CODEBUDDY_PRODUCT=buddy-intl for the intl install). JSON map
+  // via GW_OPERATOR_ENV; empty by default.
+  operatorEnv: process.env.GW_OPERATOR_ENV ? JSON.parse(process.env.GW_OPERATOR_ENV) as Record<string, string> : {},
   registrationSecret: process.env.GATEWAY_SECRET,
 })
 

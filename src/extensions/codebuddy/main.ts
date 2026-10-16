@@ -536,5 +536,6 @@ export async function run(port: number, env: Record<string, string> = {}): Promi
   await new Promise(() => undefined)
 }
 
-// Re-exported for tests / tooling that want the exact product typing.
-export { CODEBUDDY, BUDDY_INTL, HTTP_HEADER_DOMAIN, parseTokenData, parseAccountData }
+// Re-exported for tests / tooling / multi-instance installs that want the
+// exact product typing and per-product manifest assembly (trae pattern).
+export { CODEBUDDY, BUDDY_INTL, HTTP_HEADER_DOMAIN, parseTokenData, parseAccountData, codebuddyManifestFor }
