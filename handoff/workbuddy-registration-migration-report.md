@@ -58,3 +58,32 @@
 2. Console：两 provider 各显示一份、无重复；Credit 视图显示真实数据（84.15 credits 等）
 3. `/v1/models` 含 `workbuddy::` 与 `workbuddy-cn::` 两组命名空间
 4. 国际版端到端聊天 + CN 版回归聊天
+
+---
+
+## 部署与端到端验证记录（2026-10-16，授权后执行）
+
+### 部署
+- Core+Manager：1.2.1 → **1.2.2**（healthy；期间因发现池谓词缺口重建过一次镜像，同 tag）
+- workbuddycn：1.0.4 保持运行，凭据/账户未动（账户 active，quota-sync 正常）
+- workbuddy 1.0.1：经标准 Manager install API 安装，Core reload 后注册
+
+### 部署中发现并修复的真实缺陷（commit `df3ea6f`）
+**remote 账户登录后 Core 池不认**：pool 的 `hasCredential` 谓词读 Core 的 credentials 表，而 remote 登录流程（RFC §10.3）从不写该表（真实 token 只在扩展卷）。结果：新注册的扩展账户在 Core 显示 active+authenticated，却被池排除 → 503 "no available account for this model"。
+**修复**：`pollLogin()` 成功时返回非敏感标记 `{storedInExtension:true}`，login-service 经正常加密路径持久化——标记不含任何 token 材料。修复前注册的账户经一次幂等 admin poll 恢复（本次实测）。
+
+### 端到端验证（真实请求，经 Core → 扩展 → workbuddy.ai 上游）
+| 项 | 结果 |
+|---|---|
+| Core/Manager/双扩展健康与版本 | ✅ 1.2.2 / 1.2.2 / 1.0.1 / 1.0.4，全部 healthy |
+| Console providers 单份显示 | ✅ 7 个，duplicates: none |
+| 双命名空间模型 | ✅ workbuddy 27 个（真实目录同步）、workbuddycn 57 个 |
+| Credit Console 真实数据 | ✅ intl：84.15 credits（reset 10-31）；CN：2638.24 credits（rawJson 修复生效） |
+| 国际版普通聊天 | ✅ glm-5.3 → "ok"；deepseek-v4-flash / kimi-k3-1 → 上游 11102（该账户等级无此模型服务，诚实透传） |
+| 国际版流式 | ✅ SSE 62 帧，内容正确 |
+| 国际版工具回填 | ⚠️ 首轮发起模型无服务（11102）——glm-5.3 下应可用，Workspace 路径与 CN 版同代码已验证 |
+| CN 普通聊天回归 | ✅ deepseek-v4.1-flash → "ok" |
+| CN Workspace 工具回填 | ✅ "The result of 2+2 is **4**." |
+
+### 验证用临时 Key
+创建/撤销均经 admin API（intl-verify-temp2 → revoked），明文未进任何持久位置。
