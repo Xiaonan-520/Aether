@@ -7,8 +7,6 @@
  * captcha manager, which is admin-submitted only (never auto-solved).
  */
 import type { ProviderRegistry } from '../core/registry/provider-registry.js'
-import { createCodeBuddyProvider } from './codebuddy/index.js'
-import { createBuddyIntlProvider } from './buddy-intl/index.js'
 import { createQoderProvider } from './qoder/index.js'
 import { QODER, QODER_CN } from './qoder/product.js'
 import { createZCodeProvider } from './zcode/index.js'
@@ -32,16 +30,15 @@ export function registerProviders(
   // workbuddy (international) + workbuddy-cn: migrated to the extension
   // deployables (extensions/workbuddy and extensions/workbuddycn, installed
   // via the Extension Manager) — verified against the real workbuddy.ai
-  // upstream on 2026-10-16. Shared buddy infrastructure stays in
-  // src/providers/shared/buddy for the extension builds and remaining
-  // built-in buddy products (codebuddy / buddy-intl).
-  registry.register(createCodeBuddyProvider(options.fetcher))
-  registry.register(createBuddyIntlProvider(options.fetcher))
-  // lobsterai: migrated to the extension deployable (src/extensions/lobsterai,
-  // installed via the Extension Manager). No in-process adapter anymore —
-  // Phase 3 dual-track ends here for this provider.
-  // cline: migrated to the extension deployable (src/extensions/cline,
-  // installed via the Extension Manager) — batch 3 of the provider migration.
+  // upstream on 2026-10-16.
+  // codebuddy (mainland) + buddy-intl: migrated to the extension deployable
+  // (src/extensions/codebuddy, one image serving both products via
+  // CODEBUDDY_PRODUCT) — batch 6 of the provider migration. Shared buddy
+  // infrastructure stays in src/providers/shared/buddy for the extension
+  // builds (workbuddy / workbuddycn / codebuddy extensions all import it).
+  // qoder (both product instances) remain built-in: chat requires the
+  // proprietary client WASM (compliance red line — never shipped in an
+  // image) pending the RFC §24.7 volume-mount design.
   registry.register(createZCodeProvider({ captcha, ...(options.fetcher ? { fetcher: options.fetcher } : {}) }))
   // trae (both product instances): migrated to the extension deployable
   // (src/extensions/trae, one image serving trae/trae-intl via TRAE_PRODUCT)

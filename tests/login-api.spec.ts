@@ -58,20 +58,28 @@ function admin(token = ADMIN) {
 }
 
 describe('provider registration', () => {
-  it('registers every Buddy-family product plus zcode', async () => {
+  it('registers only the remaining built-ins (qoder ×2, zcode) after the buddy-family migration', async () => {
     const { app } = setup()
     const res = await app.request('/api/providers', { headers: admin() })
     expect(res.status).toBe(200)
     const body = (await res.json()) as { providers: Array<{ id: string }> }
     const ids = body.providers.map((p) => p.id).sort()
-    // workbuddy / workbuddy-cn are provided by extension deployables via the
-    // Extension Manager (extensions/workbuddy, extensions/workbuddycn) — not
-    // built-in anymore. Their protocol surfaces are covered by the extension
-    // test suites (extensions/*/test) and the buddy-family specs.
-    expect(ids).toEqual([
-      'buddy-intl', 'codebuddy',
-      'qoder', 'qoder-cn', 'zcode',
-    ])
+    // The whole buddy family (workbuddy / workbuddy-cn / codebuddy /
+    // buddy-intl) is provided by extension deployables via the Extension
+    // Manager (extensions/workbuddy, extensions/workbuddycn,
+    // src/extensions/codebuddy) — none of them are built-in anymore. Their
+    // protocol surfaces are covered by the extension E2E suites.
+    expect(ids).toEqual(['qoder', 'qoder-cn', 'zcode'])
+  })
+
+  it('login API returns 404/503 for the migrated buddy-family providers (now extension-provided)', async () => {
+    const { app } = setup()
+    for (const p of ['workbuddy', 'codebuddy', 'buddy-intl']) {
+      const res = await app.request(`/api/accounts/${p}/login`, { method: 'POST', headers: admin(), body: '{}' })
+      // The in-process adapter is gone; the provider arrives via the Extension
+      // Manager (remote registration). Core's login API must NOT fake a flow.
+      expect([404, 503]).toContain(res.status)
+    }
   })
 })
 
