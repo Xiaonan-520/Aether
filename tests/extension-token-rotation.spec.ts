@@ -255,6 +255,61 @@ describe('extension token rotation', () => {
       expect(events.some((e) => e.kind === 'extension.token_refresh_failed')).toBe(true)
     })
 
+    it('the retried request uses the REFRESHED adapter, not the pre-loop one', async () => {
+      // Regression for a subtle trap: ChatService captures `adapter` before the
+      // attempt loop. registry.replace() swaps the registry entry, but the local
+      // variable keeps pointing at the old RemoteProvider (old token), so the
+      // retry would fail again. ChatService must re-read the registry.
+      ext = await startExtension(NEW_TOKEN)
+      await provision(ext.endpointUrl, NEW_TOKEN)
+
+      const registry = new ProviderRegistry()
+      const store = new MemoryStore()
+      const manifest = await (await fetch(`${ext.endpointUrl}/manifest`)).json()
+      const [staleProvider] = buildRemoteProviders({
+        manifest: structuredClone(manifest),
+        endpoints: { baseUrl: ext.endpointUrl, token: OLD_TOKEN },
+      })
+      registry.register(staleProvider)
+
+      // Capture the stale adapter the way ChatService does.
+      const captured = registry.get(PROVIDER_ID)
+      expect(captured).toBeDefined()
+
+      // Refresh (as recovery does).
+      const recovery = new ExtensionAuthRecovery(
+        { store, registry, now: () => Date.now() } as never,
+        { managerUrl: 'http://manager.test', managerToken: 'mgr-token' },
+        (async () => new Response(JSON.stringify({
+          manifest, endpointUrl: ext.endpointUrl, token: NEW_TOKEN,
+        }), { status: 200 })) as typeof fetch,
+      )
+      expect(await recovery.refresh(EXT_ID)).toBe(true)
+
+      // The registry entry is a DIFFERENT object now...
+      const reRead = registry.get(PROVIDER_ID)
+      expect(reRead).toBeDefined()
+      expect(reRead).not.toBe(captured)
+
+      // ...and only the re-read one can actually call the rotated extension.
+      let staleFailed = false
+      try {
+        await captured!.chat.chat(
+          { provider: PROVIDER_ID, resolveCredential: async () => undefined } as never,
+          { model: 'glm-5.3', messages: [{ role: 'user', content: 'hi' }] } as never,
+          { id: 'acc-c1' } as never,
+        )
+      } catch { staleFailed = true }
+      expect(staleFailed).toBe(true) // old token → rejected
+
+      const okResult = await reRead!.chat.chat(
+        { provider: PROVIDER_ID, resolveCredential: async () => undefined } as never,
+        { model: 'glm-5.3', messages: [{ role: 'user', content: 'hi' }] } as never,
+        { id: 'acc-c1' } as never,
+      )
+      expect(okResult.content).toBe('ok')
+    })
+
     it('resolves the owning extension id from the Manager (multi-provider images)', async () => {
       ext = await startExtension(NEW_TOKEN)
       const manifest = await (await fetch(`${ext.endpointUrl}/manifest`)).json()

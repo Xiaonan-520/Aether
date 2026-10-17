@@ -107,7 +107,7 @@ export class ChatService {
       throw new OpenAIApiError(404, 'invalid_request_error', `model "${req.model}" not found`)
     }
     const { entry, provider } = resolution
-    const adapter = this.ctx.registry.get(provider)
+    let adapter = this.ctx.registry.get(provider)
     if (!adapter) {
       throw new OpenAIApiError(503, 'upstream_error', `provider "${provider}" is not installed`)
     }
@@ -164,6 +164,11 @@ export class ChatService {
           extensionAuthRecovered = true
           const recovered = await this.recoverExtensionAuth(provider)
           if (recovered) {
+            // The registry now holds a provider built with the rotated token;
+            // re-read it so the retry uses the fresh client instead of the
+            // stale adapter captured before the loop.
+            const fresh = this.ctx.registry.get(provider)
+            if (fresh) adapter = fresh
             attempt-- // retry within the attempt budget, same account
             exclude.delete(account.id)
             continue
