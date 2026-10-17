@@ -54,7 +54,11 @@ const contentPartSchema = z.union([
 ])
 
 const messageSchema = z.object({
-  role: z.enum(['system', 'user', 'assistant', 'tool']),
+  // 'developer' is the OpenAI instruction role (GPT-5 family). The canonical
+  // ChatMessage has no developer role: it is normalized to 'system' below,
+  // preserving content, order and name — the client instruction semantics
+  // survive as a system message.
+  role: z.enum(['system', 'developer', 'user', 'assistant', 'tool']),
   content: z
     .union([z.string(), z.array(contentPartSchema), z.null()])
     .optional(),
@@ -116,7 +120,7 @@ const chatRequestSchema = z.object({
 /** OpenAI message → canonical ChatMessage. */
 function toCanonicalMessage(m: z.infer<typeof messageSchema>, index: number): ChatMessage {
   return {
-    role: m.role,
+    role: m.role === 'developer' ? 'system' : m.role,
     content: flattenContent(m.content, index, m.role),
     name: m.name,
     toolCalls: m.tool_calls?.map((tc) => ({

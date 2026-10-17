@@ -130,3 +130,46 @@ async function collect<T>(gen: AsyncIterable<T>): Promise<T[]> {
   for await (const item of gen) out.push(item)
   return out
 }
+
+describe('developer role normalization (OpenAI GPT-5 instruction role)', () => {
+  it('accepts a bare developer message and normalizes it to system, content preserved', () => {
+    const req = parseChatCompletionsRequest({
+      model: 'workbuddy::glm-5.3',
+      messages: [{ role: 'developer', content: 'You are a coding agent.' }, { role: 'user', content: 'hi' }],
+    })
+    expect(req.messages[0]).toMatchObject({ role: 'system', content: 'You are a coding agent.' })
+    expect(req.messages[1]).toMatchObject({ role: 'user', content: 'hi' })
+  })
+
+  it('preserves order and both messages when system AND developer are present (no dedup, no rewrite)', () => {
+    const req = parseChatCompletionsRequest({
+      model: 'workbuddy::glm-5.3',
+      messages: [
+        { role: 'system', content: 'base instructions' },
+        { role: 'developer', content: 'extra policy' },
+        { role: 'user', content: 'q' },
+        { role: 'assistant', content: 'a' },
+        { role: 'user', content: 'q2' },
+      ],
+    })
+    expect(req.messages.map((m) => m.role)).toEqual(['system', 'system', 'user', 'assistant', 'user'])
+    expect(req.messages[0].content).toBe('base instructions')
+    expect(req.messages[1].content).toBe('extra policy')
+  })
+
+  it('keeps developer messages ahead of tool calls in multi-turn tool flows', () => {
+    const req = parseChatCompletionsRequest({
+      model: 'codebuddy::glm-5.3',
+      messages: [
+        { role: 'developer', content: 'policy' },
+        { role: 'user', content: 'run it' },
+        { role: 'assistant', content: '', tool_calls: [{ id: 't1', type: 'function', function: { name: 'f', arguments: '{}' } }] },
+        { role: 'tool', content: 'result', tool_call_id: 't1' },
+      ],
+      tools: [{ type: 'function', function: { name: 'f' } }],
+    })
+    expect(req.messages[0]).toMatchObject({ role: 'system', content: 'policy' })
+    expect(req.messages[2].toolCalls).toEqual([{ id: 't1', name: 'f', arguments: '{}' }])
+    expect(req.messages[3]).toMatchObject({ role: 'tool', toolCallId: 't1' })
+  })
+})
