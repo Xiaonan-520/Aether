@@ -26,3 +26,33 @@
 
 ## 回滚信息
 - 部署前 Core/Manager 镜像 id：4d6a5f9462b2（1.2.3 旧版）；扩展镜像 tag 均保留；数据卷零删除
+
+---
+
+## 真实账号验证结果（2026-10-17，人工授权后）
+
+两个产品的人工授权均完成，逐项验证结果（真实上游，非模拟）：
+
+### codebuddy（国内版，账号 codebuddy-bf774c93）
+| 项 | 结果 |
+|---|---|
+| 登录持久化 | ✅ status=active；凭据 AES-GCM 加密存扩展卷（codebuddy-credentials.json.enc），Core 侧零凭据明文 |
+| 模型发现 | ✅ **32 个真实模型**（deepseek-v4-flash/pro、glm-5.3、codewise 系列、auto 等） |
+| 普通聊天 | ✅ glm-5.3 非流式 200，回复 "ok" |
+| 流式响应 | ✅ SSE 20 帧 + [DONE] |
+| 签到领取 | ✅ 真实结果 `already_claimed`（当日已签，上游权威状态，无重复请求） |
+| 额度查询 | ✅ 诚实 unknown（buddy meter 无可读余额，声明即语义） |
+
+### buddy-intl（国际版，账号 buddy-intl-1dc40a0a）
+| 项 | 结果 |
+|---|---|
+| 登录持久化 | ✅ status=active；凭据独立卷（gw-ext-buddy-intl-state） |
+| 模型发现 | ✅ **17 个真实模型**（deepseek-v4-flash、auto-chat、balanced-model 等，与国内版池不同——产品隔离符合预期） |
+| 普通聊天 | ✅ glm-5.3 非流式 200 "ok" |
+| 流式响应 | ✅ SSE 16 帧 + [DONE] |
+| 签到领取 | ✅ 真实结果 `not_available`（国际版当前无进行中的签到活动，honest passthrough） |
+
+### 环境收尾
+- 临时验证 key 已撤销；过期的 needs_manual_action 探测账号已清理
+- 最终账号：workbuddy ×2（active）+ codebuddy + buddy-intl，全部 active
+- 生产 ai-gateway 全程未触碰
