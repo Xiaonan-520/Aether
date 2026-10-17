@@ -38,6 +38,7 @@ import {
   buildRefreshBody,
   isExpired,
   isRefreshable,
+  minimaxCreditShape,
   parseMinimaxClaimOutcome,
   resolveMinimaxTimezoneId,
   parseMinimaxCreditBalance,

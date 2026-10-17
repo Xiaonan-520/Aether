@@ -437,7 +437,13 @@ function envelopeData(payload: Record<string, unknown>): Record<string, unknown>
 }
 
 function num(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  // amounts arrive as STRINGS ("393.50")
+  if (typeof value === 'string' && value.trim() !== '') {
+    const n = Number(value)
+    return Number.isFinite(n) ? n : undefined
+  }
+  return undefined
 }
 
 /** Read the check-in panel; null when the response cannot be understood. */
@@ -454,19 +460,43 @@ export function parseMinimaxSigninStatus(payload: Record<string, unknown>): Mini
 }
 
 /** Read the credit buckets. `total_count` is the RECORD COUNT, not the balance. */
+/**
+ * Read the credit buckets from `credit/details`.
+ *
+ * Verified live field names (the reference implementation's `type` bucket does
+ * not exist in the current response):
+ *
+ *   { credit_type: 2, granted_amount: "400.00", remaining_amount: "393.50",
+ *     consumed_amount: "6.50", granted_at_ms, expire_at_ms }
+ *
+ * `credit_type` 2 = daily grant; amounts are STRINGS and must be parsed.
+ */
 export function parseMinimaxCreditBalance(payload: Record<string, unknown>): MinimaxCreditBalance | null {
   const details = Array.isArray(payload.details) ? payload.details as Array<Record<string, unknown>> : []
+  if (!Array.isArray(payload.details)) return null
   let daily = 0
-  let monthly = 0
-  let recommended = 0
+  let other = 0
   for (const d of details) {
-    const bucket = typeof d.type === 'string' ? d.type : ''
-    const remain = num(d.remain_amount) ?? num(d.remain) ?? 0
-    if (bucket.includes('day')) daily += remain
-    else if (bucket.includes('month')) monthly += remain
-    else if (bucket.includes('recommend')) recommended += remain
+    const remain = num(d.remaining_amount) ?? num(d.remain_amount) ?? 0
+    // credit_type 2 is the daily grant; other types (monthly/referral) go to other
+    if (num(d.credit_type) === 2) daily += remain
+    else other += remain
   }
-  return { total: daily + monthly + recommended, daily, monthly, recommended }
+  return { total: daily + other, daily, monthly: other, recommended: 0 }
+}
+
+/** Structural shape of the credit/details payload (for honest diagnostics). */
+export function minimaxCreditShape(payload: Record<string, unknown>): unknown {
+  return {
+    total_count: num(payload.total_count) ?? null,
+    detailsLen: Array.isArray(payload.details) ? payload.details.length : null,
+    detailsSample: Array.isArray(payload.details) && payload.details.length > 0
+      ? Object.fromEntries(Object.entries(payload.details[0] as Record<string, unknown>).map(([k, v]) => [
+          k, typeof v === 'string' ? `str(${v.length})` : typeof v === 'number' ? v : typeof v,
+        ]))
+      : null,
+    baseRespStatus: (payload.base_resp as Record<string, unknown> | undefined)?.status_code ?? null,
+  }
 }
 
 /**
