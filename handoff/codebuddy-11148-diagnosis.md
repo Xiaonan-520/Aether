@@ -1,6 +1,10 @@
 # CodeBuddy 11148 "tool calls and tool results do not match" 诊断报告
 （2026-10-17，只读诊断，未修改代码，未部署）
 
+> **代码归属说明**：11148 与 11128 是**两个独立问题**，请勿混淆。
+> - 11148 = 工具调用配对/空名块（本地 messages 映射缺失）→ 已修复并部署（Core 1.2.8、codebuddy/buddy-intl 1.0.5，commit `2765657`）。
+> - 11128 = 上游渠道内容校验（git 上下文标签串）→ 未做任何网关侧改动，处置为弃用被污染会话（见 `zcode-11128-history-contamination.md`）。
+
 ## 1. Gitee 项目研究结果（deepseek-harness-codearts）
 
 获取并研读了 `src/openai-compat.ts`（84KB）、`src/sse.ts`（67KB）、`src/message-shape.ts`、`src/buddy.ts`（该仓库 git 协议不可达，通过 raw 文件接口获取）。

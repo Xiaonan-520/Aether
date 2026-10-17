@@ -1,5 +1,7 @@
 # ZCode 11128 最终诊断（2026-10-17，只读，指纹复现成功）
 
+> **⚠️ 结论已被推翻（2026-10-17 后续）**：本文断言 11128 是“ZCode 内置 system prompt 带客户端身份声明”所致——**错误**。官方 ZCode 源码不含该身份句（见 `zcode-source-investigation.md`）；真实触发物是 git 上下文标签（见 `zcode-11128-root-cause-confirmed.md`）。本文 A/B 实测结果仍有效，但“归因于客户端身份指纹”的结论作废。
+
 ## 决定性新证据（真实上游 A/B，1 次成功复现）
 
 | system prompt | 结果 |

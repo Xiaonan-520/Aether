@@ -1,5 +1,11 @@
 # 11128 触发特征矩阵与项目对照（2026-10-17，只读调查）
 
+> **⚠️ 部分已被推翻（2026-10-17 后续实测，见 `zcode-11128-history-contamination.md`）**
+> 1. 本文“**仅校验 system 消息**”的结论是**错的**：同一指纹出现在 **assistant 正文**同样触发 11128。user 消息 / tool 结果 / tool_call 的 arguments / reasoning_content 不触发（已实测）。
+> 2. 本文“CodeBuddy 渠道不受影响”的暗示**不成立**：codebuddy 对同一指纹同样返回 11128。
+> 3. 本文把根因倾向解释为“客户端身份指纹”——该假设后来被推翻，见 `zcode-source-investigation.md` 与 `zcode-11128-root-cause-confirmed.md`。本文 A/B 表本身（逐条实测结果）仍然有效。
+> 4. **下文出现的具体触发串属于已确认指纹。按交接规则，禁止在 assistant 正文/摘要中复述；此处仅因是历史既存证据文件而保留，新文档一律用描述性代称。**
+
 ## 1. 当前项目中与 11128 相关的代码位置和调用路径（已证实）
 
 | 环节 | 位置 | 说明 |
@@ -29,9 +35,24 @@
 | `You are Codex CLI` / `OpenAI Codex` / `Gemini CLI` / `Qwen Code` / `Cursor` | 200 | 不触发 |
 | `You are ZCode, an interactive coding agent`（官方 ZCode 首句） | 200 | 不触发 |
 | 指纹句作为第二条 system（首条正常） | **11128** | ✅ 触发——校验作用于**任一 system 消息**，非仅第一条 |
-| 指纹句放在 user 消息里 | 200 | 不触发——**仅校验 system 消息** |
+| 指纹句放在 user 消息里 | 200 | 不触发——**当时判定“仅校验 system 消息”，已被后续实测推翻**：见下方勘误 |
 
-匹配粒度判定：上游对每条 system 消息做**规范化后的完整连续子串匹配**（大小写不敏感；句首句尾可有轻微差异，但句中不能增删字符/拆句）。第三方 proxy 项目的单条正则 `You are Claude Code,\s*Anthropic's official CLI for Claude\.?/i` 与实测行为一致；其公开资料提到的 "Codex CLI 等字符串" **未获实证**（实测 200）。
+匹配粒度判定：上游对每条 **system 消息** 做**规范化后的完整连续子串匹配**（大小写不敏感；句首句尾可有轻微差异，但句中不能增删字符/拆句）。第三方 proxy 项目的单条正则与实测行为一致；其公开资料提到的 "Codex CLI 等字符串" **未获实证**（实测 200）。
+
+### 3.1 勘误（2026-10-17 后续实测，只读）
+
+对同一指纹（git 上下文句式，见 root-cause 报告）做了按 role 的分离测试，经 phase3 网关（18080）→ workbuddy 族扩展：
+
+| 指纹所在位置 | 结果 |
+|---|---|
+| system 消息（任一位置） | 11128 |
+| **assistant 正文 text** | **11128** |
+| user 消息 | 200 |
+| tool 结果 content | 200 |
+| assistant 的 tool_call arguments | 200 |
+| assistant 的 reasoning_content | 200 |
+
+结论：校验范围是 **system + assistant 正文**，不是“仅 system”。这也解释了为何旧 Pi 会话在被污染后**每次重试都失败**——被污染的内容保存在 assistant 消息里，会随历史一起重放。
 
 ## 4. 日志能确认的事实与未知项
 

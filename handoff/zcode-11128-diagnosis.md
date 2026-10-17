@@ -1,6 +1,8 @@
 # ZCode→Gateway 11128 "Illegal API invocation from an unapproved channel" 只读诊断
 （2026-10-17，未修改任何代码/配置）
 
+> **⚠️ 部分结论已被推翻**：本文推测“指纹可能来自用户实际使用的非官方客户端”，后续已排除——指纹是 git 上下文标签，来自官方 ZCode 代码（见 `zcode-11128-root-cause-confirmed.md`）。本文的路由链路与 events 表分析仍然有效。
+
 ## 1. TraceID 对应的实际路由链路（已证实）
 - TraceID `23a218c9-…` 与 TraceID 字样在 phase3 网关、workbuddycn 扩展、生产 ai-gateway、zcode-proxy 四处日志均不存在 → TraceID 是 **ZCode 客户端本地生成**的请求标识，不是我们链路的。
 - 真实路由（events 表重建）：`ZCode → phase3-gateway:18080 /v1/chat/completions → workbuddycn 扩展 → copilot.tencent.com/v2/chat/completions → HTTP 400 {code:11128}`。

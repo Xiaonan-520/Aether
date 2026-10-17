@@ -126,3 +126,39 @@ Pi Agent（GPT-5 系客户端）发送 `role: "developer"` 指令消息。Gatewa
   - developer + 流式 → 200，59 帧 SSE + [DONE]
 - Quota 回归：4 provider 全部 known:true（workbuddy 84.1 / workbuddycn 2475.22 / codebuddy 500·11包 / buddy-intl 100）
 - 生产 ai-gateway 未触碰
+
+---
+
+## developer-role 现状核对（2026-10-17，只读，未部署）
+
+| 端点 | 容器 / 镜像 | 构建时间 | 含 developer-role 修复？ |
+|---|---|---|---|
+| `:8080` | `ai-gateway` / `ghcr.io/xiaonan-520/multi-provider-ai-gateway:latest` | 2026-10-02 | **否** |
+| `:18080` | `phase3-gateway` / `local/mpag-phase3:1.2.8` | 2026-10-17 | **是**（1.2.5 起） |
+
+证据：
+- `docker inspect` → `ai-gateway` 容器创建于 2026-10-02T03:51，镜像 label `org.opencontainers.image.revision=e796d608…`（2026-10-02 提交）。
+- `git merge-base --is-ancestor 4dec778 e796d608` → **不是祖先**，即旧镜像内**不含**该修复。
+- 修复提交：`4dec778`（fix(openai): normalize the 'developer' role to 'system' at the parse layer），
+  代码位置 `src/protocol/openai/parse.ts:61`（schema 接受 developer）与 `:123`（归一为 system）。
+- 首次随镜像上线：`local/mpag-phase3:1.2.5`；后续 1.2.6 / 1.2.8 均继承。
+
+客户端实际使用情况（来自 Pi 会话记录，只读）：
+
+| 客户端 | 端点 | 是否受 developer-role 影响 |
+|---|---|---|
+| 当前 Pi 会话 | `multiple-provider-ai-gateway` → 18080 | 否（修复已上线，实测正常） |
+| 旧 Pi 会话 | `multiple-ai-gateway` → 8080（2026-10-17 04:25:30 使用） | 是（当日仍在 8080 上产生该 400） |
+
+是否仍影响真实请求：
+- **是，仍可能影响**——只要还有客户端把 baseUrl 指向 `:8080`。旧 Pi 会话 2026-10-17T04:25:30Z
+  的失败记录 `messages.0.role: Invalid enum value … received 'developer'` 就是真实请求证据。
+- 但这是**独立问题**，与 11128 / 11148 **无因果关系**：前者是解析层 zod 校验，后者是上游渠道指纹/工具配对被拒。
+  修复方式也不同（升级镜像 vs 无需网关改动）。
+
+未确认项：
+- 除 Pi 之外（RikkaHub 等）是否仍指向 8080：**未取得证据**，不下结论。
+- 生产 8080 上 `ai-gateway` 的其它历史缺陷清单未做全量重核（仅确认 developer-role 缺失）。
+
+结论：`8080` 仍跑 2026-10-02 旧镜像，**未含** developer-role 修复；`18080`（1.2.8）已含。
+是否把生产升级到 1.2.8 属独立决策，本轮**未执行**。
