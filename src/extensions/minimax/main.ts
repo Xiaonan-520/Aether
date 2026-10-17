@@ -678,7 +678,7 @@ export async function startMinimaxExtension(opts: MinimaxExtensionOptions = {}):
       })
     }
 
-    const acctMatch = /^\/v1\/accounts\/([A-Za-z0-9_-]+)(?:\/(refresh|enable|disable))?$/.exec(path)
+    const acctMatch = /^\/v1\/accounts\/([A-Za-z0-9_-]+)(?:\/(refresh|enable|disable|claim))?$/.exec(path)
     if (acctMatch) {
       const [, accountId, op] = acctMatch
       if (!op) {
