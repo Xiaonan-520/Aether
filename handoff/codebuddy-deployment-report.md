@@ -113,3 +113,16 @@ Pi Agent（GPT-5 系客户端）发送 `role: "developer"` 指令消息。Gatewa
 
 ### 待办确认
 上一轮 Quota 修复（Core 1.2.4 + 扩展 1.0.1）**已部署并实机验证通过**（codebuddy 11 包 2900 credits / buddy-intl 1 包 100 credits，Console known:true）；若与本次 1.2.5 一起部署，直接 1.2.4→1.2.5 替换即可。
+
+---
+
+## 1.2.5 部署记录（2026-10-17，developer role 修复上线）
+
+- Core/Manager 1.2.4 → **1.2.5**（扩展容器未动：codebuddy/buddy-intl 1.0.1、workbuddy 1.0.2、workbuddycn 1.0.5）
+- 端到端实测（真实上游，临时 key 已撤销）：
+  - 裸 developer（workbuddy）→ 200 "ok"
+  - system+developer 混合（codebuddy）→ 200 "ok"
+  - developer + 多轮 + 工具调用（workbuddy）→ 200 "2 + 3 = **5**"
+  - developer + 流式 → 200，59 帧 SSE + [DONE]
+- Quota 回归：4 provider 全部 known:true（workbuddy 84.1 / workbuddycn 2475.22 / codebuddy 500·11包 / buddy-intl 100）
+- 生产 ai-gateway 未触碰
