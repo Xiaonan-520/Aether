@@ -180,6 +180,28 @@ export function minimaxManifestFor(product: MinimaxProduct, extensionId = produc
           name: m.name,
           capabilities: { vision: false, toolCall: true, streaming: true },
         })),
+        actions: [
+          {
+            id: 'account-status',
+            httpMethod: 'POST',
+            title: 'Read account status',
+            mode: 'read',
+            sideEffects: 'none',
+            ui: 'none',
+            inputSchema: {
+              type: 'object',
+              properties: { account_id: { type: 'string' } },
+            },
+            outputSchema: {
+              type: 'object',
+              properties: {
+                accountId: { type: 'string' },
+                status: { type: 'string' },
+                region: { type: 'string' },
+              },
+            },
+          },
+        ],
       },
     ],
     security: {
@@ -684,6 +706,21 @@ export async function startMinimaxExtension(opts: MinimaxExtensionOptions = {}):
         const accepted = store.setEnabled(accountId, op === 'enable')
         return send(res, 200, { accountId, accepted, status: op === 'enable' ? 'active' : 'disabled' })
       }
+    }
+
+    if (req.method === 'POST' && path === '/v1/actions/account-status') {
+      // Declared read-only action (conformance requires at least one). Returns
+      // the normalized projection only — never credential material.
+      const body = await readJson(req) as { payload?: { account_id?: unknown } } | undefined
+      const payload = (body?.payload ?? {}) as Record<string, unknown>
+      const accountId = typeof payload.account_id === 'string' ? payload.account_id : store.list()[0]?.accountId ?? ''
+      const rec = store.list().find((r) => r.accountId === accountId)
+      if (!rec) {
+        return send(res, 200, { result: { accountId, status: 'unknown', region: product.region } })
+      }
+      const expired = isExpired(rec.credential, now())
+      const status = !rec.enabled ? 'disabled' : expired ? (isRefreshable(rec.credential) ? 'token_expired' : 'auth_failed') : 'active'
+      return send(res, 200, { result: { accountId, status, region: product.region } })
     }
 
     if (req.method === 'POST' && path === '/v1/chat') {

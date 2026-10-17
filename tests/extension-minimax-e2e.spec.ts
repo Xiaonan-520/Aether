@@ -324,3 +324,24 @@ describe.each([
 afterAll(() => {
   delete process.env.GATEWAY_EXTENSION_TOKEN
 })
+
+describe.each([
+  ['minimax', MINIMAX] as const,
+  ['minimaxintl', MINIMAX_INTL] as const,
+])('%s declared action', (label, product) => {
+  it('serves the read-only account-status action without leaking credentials', async () => {
+    const h = await boot(product)
+    try {
+      const id = await login(h.ext)
+      const res = await fetch(`${h.ext.endpointUrl}/v1/actions/account-status`, {
+        method: 'POST', headers: AUTH, body: JSON.stringify({ payload: { account_id: id } }),
+      })
+      expect(res.status).toBe(200)
+      const body = await res.json() as { result: { accountId: string; status: string; region: string } }
+      expect(body.result).toMatchObject({ accountId: id, status: 'active', region: product.region })
+      const raw = JSON.stringify(body)
+      expect(raw).not.toContain('acc-1')
+      expect(raw).not.toContain('ref-1')
+    } finally { await h.close() }
+  })
+})
