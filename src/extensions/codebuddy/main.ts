@@ -42,6 +42,7 @@ import { CHAT_PATH, HTTP_HEADER_DOMAIN } from '../../providers/shared/buddy/cons
 import { CODEBUDDY, BUDDY_INTL, resolveUserAgent, type BuddyProduct } from '../../providers/shared/buddy/product.js'
 import { claimDailyCheckin, fetchCheckinStatus } from '../../providers/shared/buddy/credits.js'
 import { fetchMeterQuota } from '../../providers/shared/buddy/meter.js'
+import { normalizeChannelText } from '../../providers/shared/buddy/channel-text.js'
 import { decodeSseStream } from '../../protocol/openai/sse.js'
 import { CodeBuddyCredentialStore } from './credential-store.js'
 import type { ExtensionManifest } from '../../protocol/extension/manifest.js'
@@ -75,7 +76,7 @@ function codebuddyManifestFor(product: BuddyProduct, extensionId?: string): Exte
     apiVersion: '1.0',
     extension: {
       id: extId,
-      version: '1.0.5',
+      version: '1.0.6',
       displayName: product.displayName,
       description: `CodeBuddy-family provider extension (${product.id}) — external-link login, chat, check-in credit`,
       license: 'MIT',
@@ -252,7 +253,9 @@ export async function startCodeBuddyExtension(opts: CodeBuddyExtensionOptions = 
             type: 'function' as const,
             function: { name: String(tc.name), arguments: typeof tc.arguments === 'string' && tc.arguments.trim() !== '' ? tc.arguments : '{}' },
           }))
-        const text = typeof m.content === 'string' ? m.content : ''
+        // Assistant text is part of the upstream channel check and a transcript
+        // replays it every turn; normalize the known git-context label first.
+        const text = normalizeChannelText(typeof m.content === 'string' ? m.content : '')
         wire.push({
           role: 'assistant',
           // OpenAI norm: empty text + tool calls → content must be null.
@@ -267,7 +270,10 @@ export async function startCodeBuddyExtension(opts: CodeBuddyExtensionOptions = 
         wire.push({ role: 'tool', tool_call_id: id, content: typeof m.content === 'string' ? m.content : '' })
         continue
       }
-      wire.push({ role: m.role, content: typeof m.content === 'string' ? m.content : '' })
+      // `system` is the primary surface for the channel check; rewrite only the
+      // confirmed git-context label and preserve every other byte.
+      const rest = typeof m.content === 'string' ? m.content : ''
+      wire.push({ role: m.role, content: m.role === 'system' ? normalizeChannelText(rest) : rest })
     }
     return wire
   }

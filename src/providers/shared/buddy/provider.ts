@@ -31,6 +31,7 @@ import {
   CHAT_PATH,
 } from './constants.js'
 import { resolveUserAgent, type BuddyProduct } from './product.js'
+import { normalizeChannelText } from './channel-text.js'
 import { claimDailyCheckin, fetchCheckinStatus } from './credits.js'
 import {
   BuddyRefreshExpiredError,
@@ -112,7 +113,13 @@ export function createBuddyProvider(product: BuddyProduct, fetcher: Fetcher = fe
    */
   function toUpstreamBody(req: ChatRequest, upstreamModel: string): Record<string, unknown> {
     const messages = withLeadingSystem(req.messages).map((m: ChatRequest['messages'][number]) => {
-      const base: Record<string, unknown> = { role: m.role, content: m.content }
+      // The buddy upstreams run a channel check over `system` and assistant
+      // text. Rewrite only the one confirmed git-context label; a transcript
+      // replays assistant text every turn, so both surfaces must be covered.
+      const content = (m.role === 'system' || m.role === 'assistant')
+        ? normalizeChannelText(m.content)
+        : m.content
+      const base: Record<string, unknown> = { role: m.role, content }
       if (m.toolCalls) {
         base.tool_calls = m.toolCalls.map((tc: NonNullable<ChatRequest['messages'][number]['toolCalls']>[number]) => ({
           id: tc.id,

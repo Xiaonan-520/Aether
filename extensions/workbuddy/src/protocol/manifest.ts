@@ -17,6 +17,8 @@ import { EXTENSION_ID, PROVIDER_ID, PROTOCOL_VERSION } from './types.js'
 // Keep in sync with package.json "version" — enforced by test/unit/manifest.spec.ts.
 // History: 1.0.0 shipped as image tag 1.0.0; the 1.0.1 image (claim route) failed
 // to bump this field, so Manager records showed version=1.0.0 / imageTag=1.0.1.
+// 1.0.4: normalize the confirmed git-context label in system/assistant text so
+//        ZCode-style prompts stop tripping the upstream channel check (11128).
 // 1.0.3: M0 E2E version-migration rehearsal (no functional change).
 // 1.0.1: verified against the real workbuddy.ai upstream — first message must
 // be a system prompt (code 11128); buildBody injects a neutral default. Free
@@ -24,7 +26,7 @@ import { EXTENSION_ID, PROVIDER_ID, PROTOCOL_VERSION } from './types.js'
 // 1.0.0: initial international release — forked from the workbuddycn extension
 // with WorkBuddy international product constants (platform workbuddy-ai,
 // endpoint www.workbuddy.ai, WorkBuddy attribution/UA).
-export const EXTENSION_VERSION = '1.0.3'
+export const EXTENSION_VERSION = '1.0.4'
 
 /** Fallback catalog (mirrors the upstream `buddy` CN static list). Live discovery wins. */
 const FALLBACK_MODELS: ReadonlyArray<{

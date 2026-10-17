@@ -11,6 +11,7 @@ import { errors, ProtocolError } from '../../protocol/errors.js'
 import type { ChatChunk, ChatResult, ExtensionChatRequest } from '../../protocol/types.js'
 import { credentialExpiresAtMs, isExpired } from './parsing.js'
 import { refreshCredential, RefreshTokenExpiredError } from './auth.js'
+import { normalizeChannelText } from '../../util/channel-text.js'
 
 export interface ChatDeps {
   client: UpstreamClient
@@ -52,7 +53,10 @@ export function serializeMessages(messages: ExtensionChatRequest['messages']): A
     const role = message.role
     if (role === 'assistant') {
       const content = message.content
-      const text = contentToText(content)
+      // Assistant text is part of the upstream channel check (confirmed: the
+      // same git-context label that fails in `system` also fails here), and a
+      // transcript replays it on every later turn. Normalize before mapping.
+      const text = normalizeChannelText(contentToText(content))
       // Core sends canonical camelCase (toolCalls); older OpenAI-style
       // snake_case is accepted as a fallback for direct callers.
       const toolCalls = (message as { toolCalls?: unknown; tool_calls?: unknown }).toolCalls
@@ -88,7 +92,12 @@ export function serializeMessages(messages: ExtensionChatRequest['messages']): A
         wire.push({ role: 'tool', tool_call_id: toolCallId, content: message.content })
       }
     } else {
-      wire.push({ role, content: message.content })
+      // `system` is the primary surface for the channel check. Rewrite only the
+      // confirmed git-context label; every other byte is preserved.
+      const outContent = role === 'system' && typeof message.content === 'string'
+        ? normalizeChannelText(message.content)
+        : message.content
+      wire.push({ role, content: outContent })
     }
   }
   return wire

@@ -21,7 +21,10 @@ import { EXTENSION_ID, PROVIDER_ID, PROTOCOL_VERSION } from './types.js'
 // 1.0.4: tool-call compat fixes — canonical toolCalls/toolCallId accepted from
 // Core (camelCase), orphan tool results downgraded to user notes, sanitized
 // upstream 400 diagnostics surfaced in error messages/logs.
-export const EXTENSION_VERSION = '1.0.6'
+// 1.0.5/1.0.6: canonical->OpenAI wire mapping + tool pairing defence (11148).
+// 1.0.7: normalize the confirmed git-context label in system/assistant text
+//        so ZCode-style prompts stop tripping the channel check (11128).
+export const EXTENSION_VERSION = '1.0.7'
 
 /** Fallback catalog (mirrors the upstream `buddy` CN static list). Live discovery wins. */
 const FALLBACK_MODELS: ReadonlyArray<{
