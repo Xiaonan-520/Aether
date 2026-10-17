@@ -56,3 +56,36 @@
 - 临时验证 key 已撤销；过期的 needs_manual_action 探测账号已清理
 - 最终账号：workbuddy ×2（active）+ codebuddy + buddy-intl，全部 active
 - 生产 ai-gateway 全程未触碰
+
+---
+
+## Quota 修复（2026-10-17，commit 4c02f02 — 未部署）
+
+### 根因（真实账号只读探测证实）
+codebuddy 扩展的 `quotaFor` 按"buddy meter 无可读余额"的错误前提**硬编码返回空快照**。实际探测（真实凭据，脱敏）显示上游 `POST /v2/billing/meter/get-user-resource` 返回腾讯云计量数据：`code:0, data.Response.Data.{TotalCount, TotalDosage, Accounts[]}`，每个 Account 是一个 credit 包（`CapacitySize/Remain/Used`、`CapacityUnit:'credits'`、`CycleEndTime`、`Status`）。
+
+**真实数据**（探测时点）：codebuddy 国内版 11 个包合计 **2900 credits**（1×500 体验包 + 10×100/2000 日签到包，Status=0）；buddy-intl 1 个包 **100 credits**。两产品结构一致、数据不同。
+
+### 修复（共享层，无 Core/Console 特例）
+| 层 | 改动 |
+|---|---|
+| `providers/shared/buddy/meter.ts`（新） | 解析 meter，每个 **Status=0** 的包映射为独立 QuotaResource（remaining/total/used/unit/resetAt 全部上游提供，resetAt=CycleEndTime 显式 +08:00）；过期/解析失败的包**省略不补零** |
+| 扩展 manifest | `quotaResources` 从空改为**通配族声明 `pkg-*`**（4 个数值字段全声明） |
+| `quota-contract.ts` | 契约校验支持通配族声明（尾缀 `*` 前缀匹配）；通配-only 声明下空快照 = "当前无包"，合法非违规 |
+| 扩展 quotaFor | 从 meter 实时读取；带 error/summary 诊断字段；rawJson 经既有链路保留 |
+
+### 测试
+- quota-contract +3（通配匹配 / 空=合法 / 类型错误仍标记）→ 13/13
+- codebuddy E2E quota 用例按 meter 真实结构重写（双包含 trial、过期包省略、summary）→ 34/34
+- Core 全量 **682 passed | 2 skipped**；typecheck / console typecheck 0 error
+
+### 部署需求（等你确认）
+| 产物 | 版本 | 说明 |
+|---|---|---|
+| 扩展镜像 | `local/gateway-extension-codebuddy:1.0.1` + 同镜像 tag `local/gateway-extension-buddy-intl:1.0.1` | manifest 变更 + meter 映射 |
+| Core 镜像 | `local/mpag-phase3:1.2.4` | 通配契约校验 |
+- 部署顺序：Core 先（1.2.3→1.2.4），两扩展 Manager upgrade（1.0.0→1.0.1，自动重注册）
+- 凭据卷不动；workbuddy 两扩展不受影响；升完后 Console 卡片即显示真实余额（ scarcest 包投影 + raw 11 包明细）
+
+### 顺带发现（待修，未在本轮范围）
+**扩展凭据加密密钥为默认值**：Manager 注入 `GATEWAY_EXTENSION_TOKEN` 但未注入 `GATEWAY_EXTENSION_SECRET`，扩展回落到 `'dev-only-insecure-secret'`——卷内凭据等于固定密钥加密。建议下轮：Manager 生成 per-extension 随机 secret 注入（凭据需重登录迁移）。已在 handoff 记录。
