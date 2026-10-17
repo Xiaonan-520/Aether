@@ -89,3 +89,27 @@ codebuddy 扩展的 `quotaFor` 按"buddy meter 无可读余额"的错误前提**
 
 ### 顺带发现（待修，未在本轮范围）
 **扩展凭据加密密钥为默认值**：Manager 注入 `GATEWAY_EXTENSION_TOKEN` 但未注入 `GATEWAY_EXTENSION_SECRET`，扩展回落到 `'dev-only-insecure-secret'`——卷内凭据等于固定密钥加密。建议下轮：Manager 生成 per-extension 随机 secret 注入（凭据需重登录迁移）。已在 handoff 记录。
+
+---
+
+## developer role 修复（2026-10-17，commit 4dec778 — 未部署）
+
+### 根因
+Pi Agent（GPT-5 系客户端）发送 `role: "developer"` 指令消息。Gateway 的 OpenAI 解析层（`src/protocol/openai/parse.ts`）role 枚举只接受 `system|user|assistant|tool`，请求在 zod 校验即 400（`messages.0.role: Invalid enum value`）——**在路由前就失败**，与 WorkBuddy/CodeBuddy 扩展无关（证据：错误消息格式与 parse 层 zod 输出一致；扩展侧从不接收该请求）。
+
+### 修复（解析层一处，所有 Provider 受益）
+- schema 接受 `developer`；`toCanonicalMessage` 将其归一为 `system`——内容、顺序、name 保留
+- **不做**去重、**不把**已有 system 改写；多指令消息本就合法（buddy 族 11128 守卫只在首条非 system 时插入默认）
+- 扩展侧零改动：Core 归一后到达扩展的必为 canonical role；workbuddy/workbuddycn/codebuddy 共用该修复
+
+### 验证
+- 回归 3 个新用例：裸 developer、system+developer 共存（多轮+工具调用，顺序保持）、工具调用链完整 → protocol-openai 10/10
+- 隔离实机验证：developer 请求通过解析层进入路由（无扩展实例报 model not found 而非 400 枚举）——原 400 消失
+- Core 全量 **685 passed | 2 skipped**；typecheck 0 error
+
+### 部署需求（等你确认）
+- Core 镜像 `local/mpag-phase3:1.2.5`（仅解析层，扩展镜像无变化）
+- 部署即生效，Pi Agent 的 developer role 请求直接恢复
+
+### 待办确认
+上一轮 Quota 修复（Core 1.2.4 + 扩展 1.0.1）**已部署并实机验证通过**（codebuddy 11 包 2900 credits / buddy-intl 1 包 100 credits，Console known:true）；若与本次 1.2.5 一起部署，直接 1.2.4→1.2.5 替换即可。
