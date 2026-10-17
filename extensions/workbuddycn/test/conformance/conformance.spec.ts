@@ -290,7 +290,9 @@ describe('Extension Protocol conformance (Phase 3)', () => {
       h = await startHarness({ authToken: 'super-secret' })
       const res = await h.request('GET', '/manifest', undefined, { token: null })
       expect(res.status).toBe(401)
-      expect((await res.json()).error).toMatchObject({ kind: 'AUTH_INVALID' })
+      // EXTENSION_AUTH: a Core↔Extension credential mismatch, deliberately
+      // distinct from AUTH_INVALID (which would park the provider account).
+      expect((await res.json()).error).toMatchObject({ kind: 'EXTENSION_AUTH' })
     })
 
     it('accepts the correct token', async () => {

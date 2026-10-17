@@ -119,10 +119,13 @@ describe('extension sdk — server skeleton', () => {
   it('rejects protected routes without or with a wrong bearer (401, protocol error body)', async () => {
     const noAuth = await get('/v1/accounts')
     expect(noAuth.status).toBe(401)
-    expect(await noAuth.json()).toMatchObject({ error: { kind: 'AUTH_INVALID' } })
+    // EXTENSION_AUTH (not AUTH_INVALID): a bad hop credential is an
+    // infrastructure condition, not a provider-account credential failure.
+    expect(await noAuth.json()).toMatchObject({ error: { kind: 'EXTENSION_AUTH' } })
 
     const badAuth = await get('/v1/accounts', 'wrong-token')
     expect(badAuth.status).toBe(401)
+    expect(await badAuth.json()).toMatchObject({ error: { kind: 'EXTENSION_AUTH' } })
 
     const ok = await get('/v1/accounts', 'sdk-test-token')
     expect(ok.status).toBe(200)

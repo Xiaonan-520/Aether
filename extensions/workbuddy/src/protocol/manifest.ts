@@ -28,7 +28,7 @@ import { EXTENSION_ID, PROVIDER_ID, PROTOCOL_VERSION } from './types.js'
 // endpoint www.workbuddy.ai, WorkBuddy attribution/UA).
 // 1.0.5: drop empty delta increments (fixed envelope with reasoning_content:"" /
 //        tool_calls:[] produced up to 3 downstream frames per token).
-export const EXTENSION_VERSION = '1.0.5'
+export const EXTENSION_VERSION = '1.0.6'
 
 /** Fallback catalog (mirrors the upstream `buddy` CN static list). Live discovery wins. */
 const FALLBACK_MODELS: ReadonlyArray<{

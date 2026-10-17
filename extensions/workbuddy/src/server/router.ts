@@ -315,9 +315,12 @@ export function createExtensionServer(opts: RouterOptions) {
       status = res.statusCode
     } catch (error) {
       if (error instanceof ExtensionAuthError) {
+        // Core↔Extension credential mismatch after a token rotation. Reported as
+        // EXTENSION_AUTH (not AUTH_INVALID) so Core re-registers instead of
+        // parking the provider account as token_expired.
         status = 401
-        errorKind = 'AUTH_INVALID'
-        if (!res.headersSent) writeJson(res, 401, { error: { kind: 'AUTH_INVALID', message: error.message } })
+        errorKind = 'EXTENSION_AUTH'
+        if (!res.headersSent) writeJson(res, 401, { error: { kind: 'EXTENSION_AUTH', message: error.message } })
       } else {
         const pe = toProtocolError(error)
         status = pe.status()

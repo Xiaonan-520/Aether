@@ -76,7 +76,7 @@ function codebuddyManifestFor(product: BuddyProduct, extensionId?: string): Exte
     apiVersion: '1.0',
     extension: {
       id: extId,
-      version: '1.0.7',
+      version: '1.0.8',
       displayName: product.displayName,
       description: `CodeBuddy-family provider extension (${product.id}) — external-link login, chat, check-in credit`,
       license: 'MIT',
@@ -493,7 +493,9 @@ export async function startCodeBuddyExtension(opts: CodeBuddyExtensionOptions = 
       return send(res, 200, { status: 'healthy', version: manifest.extension.version, accounts: { total: store.list().length, usable: store.list().filter((r) => store.isEnabled(r.accountId)).length } })
     }
 
-    if (!verifyAuth(req)) return send(res, 401, { error: { kind: 'AUTH_INVALID', message: 'bad extension token' } })
+    // Core↔Extension credential mismatch after a token rotation: EXTENSION_AUTH
+    // (not AUTH_INVALID) so Core re-registers instead of parking the account.
+    if (!verifyAuth(req)) return send(res, 401, { error: { kind: 'EXTENSION_AUTH', message: 'extension auth token mismatch' } })
 
     if (req.method === 'GET' && path === '/v1/models') {
       const accountId = url.searchParams.get('account_id') ?? store.list()[0]?.accountId

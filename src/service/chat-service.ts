@@ -17,6 +17,7 @@ import type { ServiceContext } from './context.js'
 import { resolveCredentialJson } from './context.js'
 import { AccountPool } from '../core/pool/account-pool.js'
 import type { ProviderCtx } from '../core/registry/provider.js'
+import { ExtensionAuthRecovery, resolveExtensionIdForProvider } from '../protocol/extension/auth-recovery.js'
 
 /** How many accounts may be tried for a single client request. */
 const MAX_ACCOUNT_ATTEMPTS = 3
@@ -38,7 +39,36 @@ export interface StreamOutcome {
 export type ChatOrStream = ChatOutcome | StreamOutcome
 
 export class ChatService {
-  constructor(private readonly ctx: ServiceContext) {}
+  /**
+   * Auto-recovery for Core↔Extension token desync. Built only when the manager
+   * endpoint is configured (the lifecycle routes are inert otherwise).
+   */
+  private readonly extAuthRecovery: ExtensionAuthRecovery | undefined
+
+  constructor(private readonly ctx: ServiceContext) {
+    this.extAuthRecovery = ctx.extensionManager
+      ? new ExtensionAuthRecovery(ctx, ctx.extensionManager)
+      : undefined
+  }
+
+  /**
+   * True when the failure is the Core↔Extension hop credential (a rotated
+   * extension token), not the provider account behind it.
+   */
+  private isExtensionAuthError(error: UpstreamError): boolean {
+    return error.detail === 'extension_auth'
+  }
+
+  /**
+   * Re-pull the registration package from the Manager and re-mount the provider.
+   * Idempotent and deduplicated; returns false when it could not recover.
+   */
+  private async recoverExtensionAuth(provider: string): Promise<boolean> {
+    if (!this.extAuthRecovery || !this.ctx.extensionManager) return false
+    const extensionId = await resolveExtensionIdForProvider(this.ctx.extensionManager, provider)
+    if (!extensionId) return false
+    return this.extAuthRecovery.refresh(extensionId)
+  }
 
   private providerCtx(provider: string, account: Account): ProviderCtx {
     return {
@@ -85,6 +115,8 @@ export class ChatService {
     const exclude = new Set<string>()
     let refreshedAccountId: string | null = null
     let lastError: UpstreamError | undefined
+    /** one-shot: a rotated extension token is re-registered at most once per request */
+    let extensionAuthRecovered = false
 
     for (let attempt = 0; attempt < MAX_ACCOUNT_ATTEMPTS; attempt++) {
       const selected = await this.ctx.pool.selectAccount(provider, {
@@ -123,6 +155,24 @@ export class ChatService {
       } catch (err) {
         const error = this.asUpstreamError(err, provider)
         lastError = error
+
+        // Extension-hop credential mismatch (token rotated by the Manager).
+        // This says NOTHING about the provider account: the account is healthy
+        // and must not be parked. Re-pull the registration from the Manager and
+        // retry exactly once.
+        if (this.isExtensionAuthError(error) && !extensionAuthRecovered) {
+          extensionAuthRecovered = true
+          const recovered = await this.recoverExtensionAuth(provider)
+          if (recovered) {
+            attempt-- // retry within the attempt budget, same account
+            exclude.delete(account.id)
+            continue
+          }
+          // Could not recover: surface it as a transport failure, keep the
+          // account untouched for the next request after a manual fix.
+          this.record(provider, account.id, 'chat.fail', error.message, error)
+          throw this.toClientError(error)
+        }
 
         // auth problems: one in-place refresh + one same-account retry
         if (error.isAuthProblem && refreshedAccountId !== account.id) {

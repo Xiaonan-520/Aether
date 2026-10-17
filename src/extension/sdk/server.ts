@@ -335,9 +335,13 @@ export function createExtensionHttpServer(opts: ExtensionSdkOptions): Server {
       status = res.statusCode
     } catch (error) {
       if (error instanceof ExtensionAuthError) {
+        // The Core↔Extension hop failed (token rotated, Core still holds the old
+        // one). This is an infrastructure condition, NOT a provider account
+        // problem — reporting AUTH_INVALID here made Core park the account in
+        // `token_expired`. EXTENSION_AUTH tells Core to re-register instead.
         status = 401
-        errorKind = 'AUTH_INVALID'
-        if (!res.headersSent) writeJson(res, 401, { error: { kind: 'AUTH_INVALID', message: error.message } })
+        errorKind = 'EXTENSION_AUTH'
+        if (!res.headersSent) writeJson(res, 401, { error: { kind: 'EXTENSION_AUTH', message: error.message } })
       } else {
         const pe = toExtensionError(error)
         status = pe.status()
