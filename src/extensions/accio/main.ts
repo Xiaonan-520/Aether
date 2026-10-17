@@ -165,6 +165,19 @@ export function accioManifestFor(product: AccioProduct, region: AccioRegion, ext
           name: `${m.name} · x${m.multiple}`,
           capabilities: { vision: m.supportsImage, toolCall: true, streaming: true },
         })),
+        // conformance requires ≥1 declared action; a pure read-only status probe
+        actions: [
+          {
+            id: 'account-status',
+            httpMethod: 'POST',
+            title: 'Read account status',
+            mode: 'read',
+            sideEffects: 'none',
+            ui: 'none',
+            inputSchema: { type: 'object', properties: { account_id: { type: 'string' } } },
+            outputSchema: { type: 'object', properties: { accountId: { type: 'string' }, status: { type: 'string' }, region: { type: 'string' } } },
+          },
+        ],
       },
     ],
     security: {
@@ -572,6 +585,18 @@ export async function startAccioExtension(opts: AccioExtensionOptions = {}): Pro
         const accepted = store.setEnabled(accountId, op === 'enable')
         return send(res, 200, { accountId, accepted, status: op === 'enable' ? 'active' : 'disabled' })
       }
+    }
+
+    if (req.method === 'POST' && path === '/v1/actions/account-status') {
+      // Declared read-only action: normalized projection only, no credentials.
+      const body = await readJson(req) as { payload?: { account_id?: unknown } } | undefined
+      const payload = (body?.payload ?? {}) as Record<string, unknown>
+      const accountId = typeof payload.account_id === 'string' ? payload.account_id : store.list()[0]?.accountId ?? ''
+      const rec = store.list().find((r) => r.accountId === accountId)
+      if (!rec) return send(res, 200, { result: { accountId, status: 'unknown', region } })
+      const expired = isExpired(rec.credential, now())
+      const status = !rec.enabled ? 'disabled' : expired ? (isAccioRefreshable(rec.credential) ? 'token_expired' : 'auth_failed') : 'active'
+      return send(res, 200, { result: { accountId, status, region } })
     }
 
     if (req.method === 'POST' && path === '/v1/chat') {
