@@ -430,9 +430,18 @@ function parseUpstreamFrame(payload: string): UpstreamFrame | null {
   const frame: UpstreamFrame = {}
   if (typeof choice.finish_reason === 'string') frame.finishReason = choice.finish_reason as UpstreamFrame['finishReason']
   if (delta) {
-    if (typeof delta.content === 'string') frame.content = delta.content
-    if (typeof delta.reasoning_content === 'string') frame.reasoning = delta.reasoning_content
-    if (Array.isArray(delta.tool_calls)) {
+    // Only NON-EMPTY increments count as content. The buddy upstreams send a
+    // fixed delta envelope on every frame (`content`, `reasoning_content`,
+    // `refusal`, `tool_calls`, …) where most fields are empty strings or empty
+    // arrays. Treating "" / [] as real increments splits one upstream frame
+    // into up to three downstream frames, two of which carry nothing — a
+    // stream made mostly of empty shells. Skipping empties keeps the wire 1:1
+    // with real output.
+    if (typeof delta.content === 'string' && delta.content.length > 0) frame.content = delta.content
+    if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0) {
+      frame.reasoning = delta.reasoning_content
+    }
+    if (Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0) {
       frame.toolCalls = (delta.tool_calls as Array<Record<string, unknown>>).map((call) => {
         const fn = call.function as Record<string, unknown> | undefined
         return {
