@@ -100,7 +100,16 @@ describe('buildMinimaxPayload', () => {
     expect('thinking' in p).toBe(false)
   })
 
-  it('maps tools to Anthropic input_schema', () => {
+  it('maps canonical tools ({name,...}) to Anthropic input_schema', () => {
+    const p = buildMinimaxPayload({
+      model: 'M',
+      messages: [{ role: 'user', content: 'x' }],
+      tools: [{ name: 'bash', description: 'run', parameters: { type: 'object' } }],
+    })
+    expect(p.tools).toEqual([{ name: 'bash', description: 'run', input_schema: { type: 'object' } }])
+  })
+
+  it('also accepts OpenAI-shaped tools as a fallback', () => {
     const p = buildMinimaxPayload({
       model: 'M',
       messages: [{ role: 'user', content: 'x' }],

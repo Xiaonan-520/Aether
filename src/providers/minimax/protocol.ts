@@ -148,12 +148,21 @@ export type OpenAiMessage = {
   name?: string
 }
 
+/**
+ * Core sends the CANONICAL tool shape `{name, description, parameters}`
+ * (see `core/types.ts`); OpenAI-shaped `{type:'function',function:{…}}` is
+ * accepted as a fallback for direct callers.
+ */
+export type IncomingTool =
+  | { name: string; description?: string; parameters?: unknown }
+  | { type: string; function: { name: string; description?: string; parameters?: unknown } }
+
 export interface MinimaxPayloadOptions {
   model: string
   messages: OpenAiMessage[]
   maxTokens?: number
   temperature?: number
-  tools?: Array<{ type: string; function: { name: string; description?: string; parameters?: unknown } }>
+  tools?: IncomingTool[]
   thinking?: { type: 'adaptive' } | undefined
 }
 
@@ -263,11 +272,15 @@ export function buildMinimaxPayload(opts: MinimaxPayloadOptions): Record<string,
   if (systemParts.length > 0) payload.system = systemParts.join('\n\n')
   if (typeof opts.temperature === 'number') payload.temperature = opts.temperature
   if (opts.tools && opts.tools.length > 0) {
-    payload.tools = opts.tools.map((t) => ({
-      name: t.function.name,
-      description: t.function.description ?? '',
-      input_schema: t.function.parameters ?? { type: 'object', properties: {} },
-    }))
+    payload.tools = opts.tools.map((t) => {
+      // canonical {name,...} vs OpenAI {type:'function',function:{...}}
+      const fn = 'function' in t ? t.function : t
+      return {
+        name: fn.name,
+        description: fn.description ?? '',
+        input_schema: fn.parameters ?? { type: 'object', properties: {} },
+      }
+    })
   }
   // Deliberately NO `thinking` field by default: `disabled` is a hard 400 on
   // M3.1, and omitting it is accepted everywhere (the model may think anyway).
@@ -384,9 +397,18 @@ export function parseMinimaxEvent(raw: string): MinimaxChunk[] {
 // Check-in / credits (daily quota claim)
 // ---------------------------------------------------------------------------
 
-/** IANA timezone id the cloud endpoints expect (`timezone_id` query param). */
+/**
+ * IANA timezone id the cloud endpoints expect (`timezone_id` query param).
+ *
+ * The upstream REJECTS 'UTC' with business code 1406010011 (invalid
+ * timezone_id) — verified live. Containers have no /etc/localtime, so Node
+ * resolves to UTC there; fall back to the deployment's timezone instead of
+ * letting that happen.
+ */
 export function resolveMinimaxTimezoneId(): string {
-  return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai'
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  if (!zone || zone === 'UTC') return 'Asia/Shanghai'
+  return zone
 }
 
 export interface MinimaxSigninStatus {

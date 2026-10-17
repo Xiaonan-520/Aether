@@ -39,6 +39,7 @@ import {
   isExpired,
   isRefreshable,
   parseMinimaxClaimOutcome,
+  resolveMinimaxTimezoneId,
   parseMinimaxCreditBalance,
   parseMinimaxEvent,
   parseMinimaxSigninStatus,
@@ -157,6 +158,9 @@ export function minimaxManifestFor(product: MinimaxProduct, extensionId = produc
       env: [
         { name: 'LOG_LEVEL', required: false, default: 'info' },
         { name: 'MINIMAX_PRODUCT', required: false, default: 'minimax' },
+        // the check-in/credit endpoints require an IANA timezone_id and reject
+        // 'UTC'; containers have no /etc/localtime, so it must be injected
+        { name: 'TZ', required: false, default: 'Asia/Shanghai' },
       ],
       volumes: [
         { name: 'state', mountPath: '/data', purpose: 'encrypted credentials + device login sessions' },
@@ -442,7 +446,7 @@ export async function startMinimaxExtension(opts: MinimaxExtensionOptions = {}):
       ...(typeof body.max_tokens === 'number' ? { maxTokens: body.max_tokens } : {}),
       ...(typeof body.temperature === 'number' ? { temperature: body.temperature } : {}),
       ...(Array.isArray(body.tools) && body.tools.length > 0
-        ? { tools: body.tools as NonNullable<Parameters<typeof buildMinimaxPayload>[0]['tools']> }
+        ? { tools: body.tools as unknown as NonNullable<Parameters<typeof buildMinimaxPayload>[0]['tools']> }
         : {}),
     })
 
@@ -464,11 +468,18 @@ export async function startMinimaxExtension(opts: MinimaxExtensionOptions = {}):
     return res
   }
 
-  /** Call a minimax-cloud endpoint with the bearer credential. */
+  /**
+   * Call a minimax-cloud endpoint with the bearer credential.
+   *
+   * `timezone_id` is a REQUIRED query parameter — without it the upstream
+   * answers HTTP 200 with business code 1406010011 (invalid timezone_id).
+   */
   async function cloudCall(accountId: string, path: string, method: 'GET' | 'POST'): Promise<Record<string, unknown> | undefined> {
     const credential = store.get(accountId)
     if (!credential?.access_token) return undefined
-    const res = await fetcher(`${product.apiHost}${path}`, {
+    const url = new URL(`${product.apiHost}${path}`)
+    url.searchParams.set('timezone_id', resolveMinimaxTimezoneId())
+    const res = await fetcher(url.toString(), {
       method,
       headers: { authorization: `Bearer ${credential.access_token}`, accept: 'application/json' },
       ...(method === 'POST' ? { body: '{}' } : {}),
@@ -715,9 +726,26 @@ export async function startMinimaxExtension(opts: MinimaxExtensionOptions = {}):
         // Daily check-in: idempotency is decided by claim_result (1 = claimed
         // now, 2 = already claimed today); the HTTP status is 200 either way.
         const payload = await cloudCall(accountId, MINIMAX_SIGNIN_CLAIM_PATH, 'POST')
-        if (!payload) return send(res, 200, { outcome: { kind: 'failed', message: 'check-in upstream unavailable' } })
+        if (!payload) {
+          return send(res, 200, { outcome: { kind: 'failed', message: 'check-in upstream unavailable' }, upstreamShape: null })
+        }
         const outcome = parseMinimaxClaimOutcome(payload)
-        return send(res, 200, { outcome })
+        // Return the response's top-level shape so an upstream format change is
+        // diagnosable from the wire instead of guessing. Values only, no tokens.
+        const base = payload.base_resp as Record<string, unknown> | undefined
+        const businessCode = base ? base.status_code : undefined
+        const businessMsg = base ? base.status_msg : undefined
+        const shape = Object.fromEntries(Object.entries(payload).map(([k, v]) => [
+          k,
+          typeof v === 'string' ? `str(${v.length})` : Array.isArray(v) ? `arr(${v.length})` : typeof v === 'object' && v ? 'object' : v,
+        ]))
+        return send(res, 200, {
+          outcome,
+          upstreamShape: shape,
+          // business code lives in base_resp (HTTP is always 200)
+          businessCode: businessCode ?? 0,
+          businessMessage: typeof businessMsg === 'string' ? businessMsg : null,
+        })
       }
       if (op === 'refresh') {
         const out = await refreshCredential(accountId)
