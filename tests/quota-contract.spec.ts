@@ -75,6 +75,34 @@ describe('quota contract: snapshot vs declaration', () => {
   })
 })
 
+describe('quota contract: wildcard family declarations', () => {
+  const wildcardDecl: QuotaResourceDeclaration[] = [
+    { id: 'pkg-*', kind: 'credits', unit: 'credits', fields: { remaining: true, total: true, used: true, resetAt: true } },
+  ]
+
+  it('matches per-instance ids (pkg-1-pkg, pkg-2-trial) against a pkg-* family declaration', () => {
+    const r = validateQuotaSnapshotAgainstDeclaration(snapshotOf([
+      { id: 'pkg-1-pkg', kind: 'credits', remaining: 2000, total: 2000, used: 0, unit: 'credits', resetAt: '2026-11-01T16:14:53+08:00', status: 'ok' },
+      { id: 'pkg-2-trial', kind: 'credits', remaining: 100, total: 500, used: 400, unit: 'credits', resetAt: null, status: 'ok' },
+    ]), 'codebuddy', wildcardDecl)
+    expect(r.ok).toBe(true)
+    expect(r.issues).toEqual([])
+  })
+
+  it('empty snapshot under a wildcard-only declaration is legitimate (no packages right now)', () => {
+    const r = validateQuotaSnapshotAgainstDeclaration(snapshotOf([]), 'codebuddy', wildcardDecl)
+    expect(r.ok).toBe(true)
+    expect(r.issues).toEqual([])
+  })
+
+  it('still flags wrong types on wildcard-matched resources', () => {
+    const r = validateQuotaSnapshotAgainstDeclaration(snapshotOf([
+      { id: 'pkg-1-pkg', kind: 'credits', remaining: 'many' as unknown as number, total: null, used: null, unit: 'credits', resetAt: null, status: 'ok' },
+    ]), 'codebuddy', wildcardDecl)
+    expect(r.issues.some((i) => i.severity === 'type-mismatch' && i.path === 'resources.pkg-1-pkg.remaining')).toBe(true)
+  })
+})
+
 describe('quota contract: manifest validation', () => {
   const baseManifest = () => ({
     apiVersion: '1.0',

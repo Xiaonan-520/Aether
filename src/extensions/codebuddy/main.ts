@@ -41,6 +41,7 @@ import {
 import { CHAT_PATH, HTTP_HEADER_DOMAIN } from '../../providers/shared/buddy/constants.js'
 import { CODEBUDDY, BUDDY_INTL, resolveUserAgent, type BuddyProduct } from '../../providers/shared/buddy/product.js'
 import { claimDailyCheckin, fetchCheckinStatus } from '../../providers/shared/buddy/credits.js'
+import { fetchMeterQuota } from '../../providers/shared/buddy/meter.js'
 import { decodeSseStream } from '../../protocol/openai/sse.js'
 import { CodeBuddyCredentialStore } from './credential-store.js'
 import type { ExtensionManifest } from '../../protocol/extension/manifest.js'
@@ -114,10 +115,18 @@ function codebuddyManifestFor(product: BuddyProduct, extensionId?: string): Exte
           name: m.name,
           capabilities: { vision: true, toolCall: true, streaming: true },
         })),
-        // The upstream quota meter has no readable balance for this product
-        // family; declaring nothing is the honest statement. getQuota still
-        // returns an empty snapshot rather than inventing numbers.
-        quotaResources: [],
+        // Declarative quota contract (§13.1): the billing meter exposes N
+        // credit packages per account, each with remaining/total/used and a
+        // cycle end (resetAt). All four numeric fields are upstream-provided.
+        quotaResources: [
+          {
+            id: 'pkg-*',
+            kind: 'credits',
+            unit: 'credits',
+            displayName: 'Credit packages (per active package)',
+            fields: { remaining: true, total: true, used: true, resetAt: true },
+          },
+        ],
         // Read-only action surface (conformance manual-actions domain):
         // check-in activity status — no side effects, no credential egress.
         actions: [
@@ -262,16 +271,28 @@ export async function startCodeBuddyExtension(opts: CodeBuddyExtensionOptions = 
   }
 
   /**
-   * Quota snapshot (§13). The buddy meter exposes check-in status, not a
-   * readable balance — the snapshot is honestly empty rather than a guess.
+   * Quota snapshot (§13): reads the Tencent cloud billing meter
+   * (get-user-resource) and maps every ACTIVE package to its own resource
+   * line (remaining/total/used/unit/resetAt all upstream-provided). Expired
+   * or unparseable packages are omitted — never zero-filled.
    */
-  function quotaFor(accountId: string): unknown {
-    void accountId
-    return {
-      accountId,
-      resources: [],
-      checkedAt: new Date().toISOString(),
-      source: 'authoritative',
+  async function quotaFor(accountId: string): Promise<unknown> {
+    const credential = store.get(accountId)
+    if (!credential) {
+      return { accountId, resources: [], checkedAt: new Date().toISOString(), source: 'authoritative' }
+    }
+    try {
+      const meter = await fetchMeterQuota(product, credential, fetcher)
+      return {
+        accountId,
+        resources: meter.resources,
+        checkedAt: new Date().toISOString(),
+        source: 'authoritative',
+        ...(meter.error !== undefined ? { error: meter.error } : {}),
+        ...(meter.summary ? { summary: meter.summary } : {}),
+      }
+    } catch (err) {
+      return { accountId, resources: [], checkedAt: new Date().toISOString(), source: 'authoritative', error: (err as Error).message }
     }
   }
 
@@ -447,7 +468,7 @@ export async function startCodeBuddyExtension(opts: CodeBuddyExtensionOptions = 
           },
         })
       }
-      if (op === 'quota') return send(res, 200, quotaFor(accountId))
+      if (op === 'quota') return send(res, 200, await quotaFor(accountId))
       if (op === 'refresh') return send(res, 200, await refreshFor(accountId))
       if (op === 'claim') return send(res, 200, await claimFor(accountId))
       if (op === 'enable' || op === 'disable') {

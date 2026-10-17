@@ -67,6 +67,19 @@ const upstreamFetch: typeof fetch = async (input, init) => {
     ].join('\n\n') + '\n\n'
     return new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } })
   }
+  if (path.includes('/v2/billing/meter/get-user-resource')) {
+    return new Response(JSON.stringify({
+      code: 0,
+      data: { Response: { Data: {
+        TotalCount: 2, TotalDosage: 2100,
+        Accounts: [
+          { CapacityType: 1, CapacityUnit: 'credits', CapacitySize: 2000, CapacityRemain: 2000, CapacityUsed: 0, Status: 0, PackageName: 'P2000', CycleStartTime: '2026-10-01 16:14:54', CycleEndTime: '2026-11-01 16:14:53' },
+          { CapacityType: 4, CapacityUnit: 'credits', CapacitySize: 500, CapacityRemain: 100, CapacityUsed: 400, Status: 0, PackageName: 'Trial500', CycleStartTime: '2026-10-01 00:00:00', CycleEndTime: '2026-10-31 23:59:59' },
+          { CapacityType: 1, CapacityUnit: 'credits', CapacitySize: 100, CapacityRemain: 0, CapacityUsed: 100, Status: 3, PackageName: 'Expired', CycleEndTime: '2026-09-30 23:59:59' },
+        ],
+      } } },
+    }), { status: 200 })
+  }
   if (path.includes('/v2/billing/meter/checkin-activity-status')) {
     return new Response(JSON.stringify({ code: 0, data: { active: upstreamBehavior.checkinActive, today_checked_in: upstreamBehavior.checkinClaimed, streak_days: 3, daily_credit: 10 } }), { status: 200 })
   }
@@ -236,11 +249,19 @@ for (const [label, product] of [['codebuddy (mainland)', CODEBUDDY], ['buddy-int
         }
       })
 
-      it('reports an honestly empty quota snapshot (no invented numbers)', async () => {
+      it('maps the billing meter into per-package quota resources (expired packages omitted)', async () => {
         await provisionActiveAccount(ext, product.id)
         const { json } = await get(ext, '/v1/accounts/acc-c1/quota')
         expect(json).toMatchObject({ source: 'authoritative' })
-        expect((json.resources as unknown[])).toHaveLength(0)
+        const resources = json.resources as Array<{ id: string; remaining: number; total: number; used: number; unit: string; status: string; resetAt: string | null }>
+        // expired package (Status 3) is omitted entirely — no stale numbers
+        expect(resources).toHaveLength(2)
+        expect(resources[0]).toMatchObject({ id: 'pkg-1-pkg', kind: 'credits', remaining: 2000, total: 2000, used: 0, unit: 'credits', status: 'ok' })
+        expect(resources[1]).toMatchObject({ id: 'pkg-2-trial', remaining: 100, total: 500, used: 400, status: 'ok' })
+        // resetAt only from the upstream cycle end, ISO with explicit +08:00
+        expect(resources[0].resetAt).toBe('2026-11-01T16:14:53+08:00')
+        // summary mirrors the meter totals
+        expect(json.summary).toEqual({ totalCount: 2, totalDosage: 2100 })
       })
 
       it('runs the check-in claim flow: not-active → not_available, active → success, repeat → already_claimed', async () => {

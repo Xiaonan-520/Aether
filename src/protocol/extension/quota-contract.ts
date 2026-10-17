@@ -59,7 +59,22 @@ export function validateQuotaSnapshotAgainstDeclaration(
   const declaredById = new Map(declaration.map((d) => [d.id, d]))
   const snapshotIds = new Set(snapshot.resources.map((r) => r.id))
 
+  // wildcard declarations: an id ending in `*` declares a FAMILY of
+  // per-instance resources (e.g. `pkg-*` for per-package meter lines).
+  // Matching is prefix-based against the concrete snapshot id.
+  const matchDeclaration = (resourceId: string): QuotaResourceDeclaration | undefined => {
+    const exact = declaredById.get(resourceId)
+    if (exact) return exact
+    for (const d of declaration) {
+      if (d.id.endsWith('*') && resourceId.startsWith(d.id.slice(0, -1))) return d
+    }
+    return undefined
+  }
+  const hasWildcard = declaration.some((d) => d.id.endsWith('*'))
+
   for (const d of declaration) {
+    // wildcard declarations match a family — they are never "absent" as such
+    if (d.id.endsWith('*')) continue
     if (!snapshotIds.has(d.id)) {
       issues.push({
         path: `resources.${d.id}`,
@@ -68,9 +83,12 @@ export function validateQuotaSnapshotAgainstDeclaration(
       })
     }
   }
+  // a wildcard-only declaration with an empty snapshot is legitimately "no
+  // packages right now" — not a violation (the snapshot itself carries the
+  // state; the Console renders known:false).
 
   for (const r of snapshot.resources) {
-    const d = declaredById.get(r.id)
+    const d = matchDeclaration(r.id)
     if (!d) {
       issues.push({
         path: `resources.${r.id}`,
