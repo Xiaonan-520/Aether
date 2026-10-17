@@ -75,7 +75,7 @@ function codebuddyManifestFor(product: BuddyProduct, extensionId?: string): Exte
     apiVersion: '1.0',
     extension: {
       id: extId,
-      version: '1.0.2',
+      version: '1.0.3',
       displayName: product.displayName,
       description: `CodeBuddy-family provider extension (${product.id}) — external-link login, chat, check-in credit`,
       license: 'MIT',
@@ -224,7 +224,17 @@ export async function startCodeBuddyExtension(opts: CodeBuddyExtensionOptions = 
     const payload: Record<string, unknown> = { model, messages: withSystem, stream: true }
     if (typeof body.max_tokens === 'number') payload.max_tokens = body.max_tokens
     if (typeof body.temperature === 'number') payload.temperature = body.temperature
-    if (Array.isArray(body.tools) && body.tools.length > 0) payload.tools = body.tools
+    if (Array.isArray(body.tools) && body.tools.length > 0) {
+      // Core sends canonical tools ({name, description, parameters}); the
+      // upstream speaks OpenAI function-calling and silently ignores unknown
+      // tool shapes (HTTP 200, no tool_calls ever). Same mapping as the buddy
+      // built-in provider; OpenAI-shaped entries pass through untouched.
+      payload.tools = (body.tools as Array<Record<string, unknown>>).map((tool) =>
+        tool && typeof tool === 'object' && 'function' in tool
+          ? tool
+          : { type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters ?? {} } },
+      )
+    }
     const res = await fetcher(`${product.endpoint}${CHAT_PATH}`, {
       method: 'POST',
       headers: {

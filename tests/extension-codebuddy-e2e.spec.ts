@@ -291,6 +291,77 @@ for (const [label, product] of [['codebuddy (mainland)', CODEBUDDY], ['buddy-int
     }
   })
 
+  it('maps canonical tools to OpenAI function-calling format upstream (codebuddy silent-ignore fix)', async () => {
+    await provisionActiveAccount(ext, product.id)
+    let capturedTools: unknown
+    const mapWorkdir = mkdtempSync(join(tmpdir(), `gw-${product.id}-toolmap-`))
+    const mapExt = await startCodeBuddyExtension({
+      dataDir: join(mapWorkdir, 'data'),
+      secret: 'e2e-secret-0123456789abcdef',
+      fetcher: async (input, init) => {
+        const path = String(input)
+        if (path.includes('/v2/chat/completions')) {
+          const payload = JSON.parse(String(init?.body))
+          capturedTools = payload.tools
+          const sse = [
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_9","type":"function","function":{"name":"bash","arguments":""}}]}}]}',
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\\"command\\\":\\\"ls -la\\\"}"}}]}}]}',
+            'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+            'data: [DONE]',
+          ].join('\n\n') + '\n\n'
+          return new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+        }
+        return upstreamFetch(input, init)
+      },
+      product,
+    })
+    try {
+      process.env.GATEWAY_EXTENSION_TOKEN = 'e2e-ext-token'
+      await post(mapExt, '/v1/accounts', { accountId: 'acc-m1' })
+      const d = await get(mapExt, '/v1/accounts/acc-m1')
+      expect((d.json.account as Record<string, unknown>).status).toBe('active')
+      // canonical shape in (what Core sends over the extension protocol)
+      const { status, json } = await post(mapExt, '/v1/chat', {
+        accountId: 'acc-m1',
+        model: 'glm-5.3',
+        messages: [{ role: 'user', content: 'ls -la' }],
+        tools: [{ name: 'bash', description: 'run shell', parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] } }],
+        stream: false,
+      })
+      expect(status).toBe(200)
+      // upstream received OpenAI function-calling shape
+      expect(capturedTools).toEqual([
+        { type: 'function', function: { name: 'bash', description: 'run shell', parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] } } },
+      ])
+      // aggregated result carries id/name/arguments
+      expect(json.finishReason).toBe('tool_calls')
+      expect(json.toolCalls).toEqual([
+        { id: 'call_9', name: 'bash', arguments: '{"command":"ls -la"}' },
+      ])
+      // OpenAI-shaped entries pass through untouched
+      await post(mapExt, '/v1/chat', {
+        accountId: 'acc-m1',
+        model: 'glm-5.3',
+        messages: [{ role: 'user', content: 'hi' }],
+        tools: [{ type: 'function', function: { name: 'bash', description: 'd', parameters: {} } }],
+        stream: false,
+      })
+      expect(capturedTools).toEqual([{ type: 'function', function: { name: 'bash', description: 'd', parameters: {} } }])
+      // no tools → request goes upstream without a tools field at all
+      capturedTools = 'sentinel'
+      await post(mapExt, '/v1/chat', {
+        accountId: 'acc-m1',
+        model: 'glm-5.3',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: false,
+      })
+      expect(capturedTools).toBeUndefined()
+    } finally {
+      mapExt.server.close()
+      rmSync(mapWorkdir, { force: true, recursive: true })
+    }
+  })
+
   it('streams chunks as SSE chunk events', async () => {
         await provisionActiveAccount(ext, product.id)
         const res = await fetch(`${ext.endpointUrl}/v1/chat`, {

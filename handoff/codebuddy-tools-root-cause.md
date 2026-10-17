@@ -46,3 +46,31 @@ if (Array.isArray(body.tools) && body.tools.length > 0) {
 1. codebuddy E2E 补"canonical→OpenAI 形映射"断言
 2. Core 链路 codebuddy::glm-5.3-flash + tools → finish=tool_calls 且 tool_calls 完整
 3. Pi 端真实执行 ls -la → 工具结果回传闭环
+
+---
+
+## 1.0.3 修复部署记录（2026-10-17，授权后执行）
+
+### 修复内容
+`src/extensions/codebuddy/main.ts` upstreamChat：canonical tools → OpenAI function-calling 映射（OpenAI 形原样通过，无工具不发字段）。版本 1.0.2 → **1.0.3**。
+
+### 测试
+- 新增 E2E「maps canonical tools to OpenAI function-calling format upstream」：断言上游收到 OpenAI 形、聚合结果 id/name/arguments 完整、OpenAI 形透传不动、无 tools 时上游 payload 无 tools 字段
+- codebuddy E2E **38/38**；Core 全量 **691 passed | 2 skipped**（51 文件）；typecheck 全绿
+
+### 部署（upgrade 200，自动重注册，凭据卷未动）
+- gw-ext-codebuddy → 1.0.3；gw-ext-buddy-intl → 1.0.3
+- 4 账号全部 active；生产 ai-gateway 未触碰；日志 0 error
+
+### 端到端验证（真实上游，流式，临时 key 已撤销）
+| 步骤 | 结果 |
+|---|---|
+| codebuddy::glm-5.3-flash 工具调用 | finish=tool_calls，id=call_359ab7f8…，name=bash，args={"command":"ls -la"} ✅ |
+| 工具结果回传 → 继续回答 | 200："The directory is nearly empty — just one file: README.md…" ✅ |
+| 普通聊天 | 200 "ok" ✅ |
+| buddy-intl::glm-5.3 工具 | finish=tool_calls，args={"command":"pwd"} ✅ |
+
+### Quota 回归
+4 provider 全部 known:true（83.95 / 2395.99 / 1472 / 100），无回归。
+
+**待用户在 Pi 端实测 ls -la 真实闭环。**
