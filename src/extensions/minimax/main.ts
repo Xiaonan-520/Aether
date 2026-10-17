@@ -28,14 +28,20 @@ import { join } from 'node:path'
 import {
   MINIMAX,
   MINIMAX_INTL,
+  MINIMAX_CREDIT_DETAILS_PATH,
   MINIMAX_DEVICE_CODE_PATH,
+  MINIMAX_SIGNIN_CLAIM_PATH,
+  MINIMAX_SIGNIN_STATUS_PATH,
   MINIMAX_TOKEN_PATH,
   buildMinimaxPayload,
   buildPollBody,
   buildRefreshBody,
   isExpired,
   isRefreshable,
+  parseMinimaxClaimOutcome,
+  parseMinimaxCreditBalance,
   parseMinimaxEvent,
+  parseMinimaxSigninStatus,
   type MinimaxChunk,
   type MinimaxCredential,
   type MinimaxProduct,
@@ -165,8 +171,8 @@ export function minimaxManifestFor(product: MinimaxProduct, extensionId = produc
         capabilities: {
           supportsOAuth: true,
           supportsRefreshToken: true,
-          supportsQuota: false,
-          supportsCredits: false,
+          supportsQuota: true,
+          supportsCredits: true,
           supportsStreaming: true,
           supportsVision: false,
           supportsToolCall: true,
@@ -458,6 +464,19 @@ export async function startMinimaxExtension(opts: MinimaxExtensionOptions = {}):
     return res
   }
 
+  /** Call a minimax-cloud endpoint with the bearer credential. */
+  async function cloudCall(accountId: string, path: string, method: 'GET' | 'POST'): Promise<Record<string, unknown> | undefined> {
+    const credential = store.get(accountId)
+    if (!credential?.access_token) return undefined
+    const res = await fetcher(`${product.apiHost}${path}`, {
+      method,
+      headers: { authorization: `Bearer ${credential.access_token}`, accept: 'application/json' },
+      ...(method === 'POST' ? { body: '{}' } : {}),
+    })
+    if (!res.ok) return undefined
+    return (await res.json().catch(() => null)) as Record<string, unknown> | undefined
+  }
+
   async function modelsFor(accountId: string): Promise<Array<{ id: string; name: string; capabilities: { vision: boolean; toolCall: boolean; streaming: boolean } }>> {
     const fallback = product.fallbackModels.map((m) => ({
       id: m.id,
@@ -692,6 +711,14 @@ export async function startMinimaxExtension(opts: MinimaxExtensionOptions = {}):
         const accounts = (accountsProjection() as { accounts: Array<{ accountId: string }> }).accounts
         return send(res, 200, { account: accounts.find((a) => a.accountId === accountId) })
       }
+      if (op === 'claim') {
+        // Daily check-in: idempotency is decided by claim_result (1 = claimed
+        // now, 2 = already claimed today); the HTTP status is 200 either way.
+        const payload = await cloudCall(accountId, MINIMAX_SIGNIN_CLAIM_PATH, 'POST')
+        if (!payload) return send(res, 200, { outcome: { kind: 'failed', message: 'check-in upstream unavailable' } })
+        const outcome = parseMinimaxClaimOutcome(payload)
+        return send(res, 200, { outcome })
+      }
       if (op === 'refresh') {
         const out = await refreshCredential(accountId)
         const credential = store.get(accountId)
@@ -721,6 +748,31 @@ export async function startMinimaxExtension(opts: MinimaxExtensionOptions = {}):
       const expired = isExpired(rec.credential, now())
       const status = !rec.enabled ? 'disabled' : expired ? (isRefreshable(rec.credential) ? 'token_expired' : 'auth_failed') : 'active'
       return send(res, 200, { result: { accountId, status, region: product.region } })
+    }
+
+    const quotaMatch = /^\/v1\/accounts\/([A-Za-z0-9_-]+)\/quota$/.exec(path)
+    if (req.method === 'GET' && quotaMatch) {
+      const accountId = quotaMatch[1]!
+      const statusPayload = await cloudCall(accountId, MINIMAX_SIGNIN_STATUS_PATH, 'GET')
+      const creditPayload = await cloudCall(accountId, MINIMAX_CREDIT_DETAILS_PATH, 'GET')
+      const status = statusPayload ? parseMinimaxSigninStatus(statusPayload) : null
+      const credit = creditPayload ? parseMinimaxCreditBalance(creditPayload) : null
+      // honest "unknown" when the cloud endpoints cannot be read
+      const quota = credit
+        ? {
+            known: true,
+            remaining: credit.total,
+            total: null,
+            resetAt: null,
+            lastUpdatedAt: now(),
+            rawJson: JSON.stringify({ daily: credit.daily, monthly: credit.monthly, recommended: credit.recommended }),
+          }
+        : { known: false, remaining: null, total: null, resetAt: null, lastUpdatedAt: now(), rawJson: null }
+      return send(res, 200, {
+        quota,
+        checkin: status ?? null,
+        credit: credit ?? null,
+      })
     }
 
     if (req.method === 'POST' && path === '/v1/chat') {

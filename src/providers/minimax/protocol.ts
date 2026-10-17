@@ -74,6 +74,9 @@ export const MINIMAX_INTL: MinimaxProduct = {
   fallbackModels: MINIMAX.fallbackModels,
 }
 
+export const MINIMAX_SIGNIN_STATUS_PATH = '/minimax-cloud/api/v1/signin/status'
+export const MINIMAX_SIGNIN_CLAIM_PATH = '/minimax-cloud/api/v1/signin/claim'
+export const MINIMAX_CREDIT_DETAILS_PATH = '/minimax-cloud/api/v1/credit/details'
 export const MINIMAX_DEVICE_CODE_PATH = '/oauth2/device/code'
 export const MINIMAX_TOKEN_PATH = '/oauth2/token'
 
@@ -374,4 +377,89 @@ export function parseMinimaxEvent(raw: string): MinimaxChunk[] {
   }
 
   return []
+}
+
+
+// ---------------------------------------------------------------------------
+// Check-in / credits (daily quota claim)
+// ---------------------------------------------------------------------------
+
+/** IANA timezone id the cloud endpoints expect (`timezone_id` query param). */
+export function resolveMinimaxTimezoneId(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai'
+}
+
+export interface MinimaxSigninStatus {
+  claimedToday: boolean
+  streakDays: number
+  dailyCredit: number
+}
+
+export interface MinimaxCreditBalance {
+  /** total remaining credits across buckets */
+  total: number
+  daily: number
+  monthly: number
+  recommended: number
+}
+
+function withTimezone(product: MinimaxProduct, path: string): string {
+  const url = new URL(`${product.apiHost}${path}`)
+  url.searchParams.set('timezone_id', resolveMinimaxTimezoneId())
+  return url.toString()
+}
+
+function envelopeData(payload: Record<string, unknown>): Record<string, unknown> {
+  const data = payload.data
+  return data && typeof data === 'object' ? (data as Record<string, unknown>) : {}
+}
+
+function num(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+/** Read the check-in panel; null when the response cannot be understood. */
+export function parseMinimaxSigninStatus(payload: Record<string, unknown>): MinimaxSigninStatus | null {
+  const data = envelopeData(payload)
+  const panel = data.panel && typeof data.panel === 'object'
+    ? (data.panel as Record<string, unknown>)
+    : data
+  const claimed = panel.is_today_sign_in ?? panel.todaySignedIn ?? panel.claimed
+  const streak = num(panel.continuous_days) ?? num(panel.streak_days) ?? 0
+  const daily = num(panel.points)
+  if (claimed === undefined) return null
+  return { claimedToday: Boolean(claimed), streakDays: streak, dailyCredit: daily ?? 0 }
+}
+
+/** Read the credit buckets. `total_count` is the RECORD COUNT, not the balance. */
+export function parseMinimaxCreditBalance(payload: Record<string, unknown>): MinimaxCreditBalance | null {
+  const details = Array.isArray(payload.details) ? payload.details as Array<Record<string, unknown>> : []
+  let daily = 0
+  let monthly = 0
+  let recommended = 0
+  for (const d of details) {
+    const bucket = typeof d.type === 'string' ? d.type : ''
+    const remain = num(d.remain_amount) ?? num(d.remain) ?? 0
+    if (bucket.includes('day')) daily += remain
+    else if (bucket.includes('month')) monthly += remain
+    else if (bucket.includes('recommend')) recommended += remain
+  }
+  return { total: daily + monthly + recommended, daily, monthly, recommended }
+}
+
+/**
+ * Read the daily-claim result from a check-in response.
+ * Idempotency: `claim_result` 1 = claimed now, 2 = already claimed today.
+ * The HTTP status is 200 either way.
+ */
+export function parseMinimaxClaimOutcome(payload: Record<string, unknown>): {
+  kind: 'claimed' | 'already-claimed' | 'failed'
+  credit?: number
+  message?: string
+} {
+  const data = envelopeData(payload)
+  const claimResult = num(data.claim_result)
+  if (claimResult === 2) return { kind: 'already-claimed' }
+  if (claimResult === 1) return { kind: 'claimed', credit: num(data.points) ?? 0 }
+  return { kind: 'failed', message: 'check-in response lacks a valid claim_result' }
 }
