@@ -87,6 +87,25 @@ describe('openai serialize', () => {
       choices: [{ delta: { content: 'he' }, finish_reason: null }],
     })
   })
+
+  it('stream tool_call deltas: name only when present, stable index, no empty-name poisoning', () => {
+    const ctx = newStreamContext('m1')
+    // Frame 1: call start (id+name); frame 2: argument delta with no id/name.
+    const f1 = serializeChatChunk({ text: '', toolCalls: [{ id: 'call_1', name: 'bash', arguments: '{"' }] }, ctx.model, ctx.id, ctx.created)
+    const tc1 = (f1.choices![0]!.delta as { tool_calls: Array<Record<string, unknown>> }).tool_calls[0]!
+    expect(tc1).toMatchObject({ index: 0, id: 'call_1', type: 'function', function: { name: 'bash' } })
+    const f2 = serializeChatChunk({ text: '', toolCalls: [{ arguments: 'command":"pwd"}' }] }, ctx.model, ctx.id, ctx.created)
+    const tc2 = (f2.choices![0]!.delta as { tool_calls: Array<Record<string, unknown>> }).tool_calls[0]!
+    // No name field at all (never an empty string) and no id on the delta.
+    expect(tc2.function).toEqual({ arguments: 'command":"pwd"}' })
+    expect(tc2).toMatchObject({ index: 0, type: 'function' })
+    expect(JSON.stringify(tc2)).not.toContain('"name"')
+    // Two parallel calls in one chunk keep distinct, ordered indices.
+    const fp = serializeChatChunk({ text: '', toolCalls: [{ id: 'call_a', name: 'bash', arguments: '' }, { id: 'call_b', name: 'read', arguments: '' }] }, ctx.model, ctx.id, ctx.created)
+    const tcs = (fp.choices![0]!.delta as { tool_calls: Array<Record<string, unknown>> }).tool_calls
+    expect(tcs.map((t) => t.index)).toEqual([0, 1])
+    expect(tcs.map((t) => (t.function as { name?: string }).name)).toEqual(['bash', 'read'])
+  })
 })
 
 describe('openai sse', () => {

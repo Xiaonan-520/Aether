@@ -54,7 +54,7 @@ export async function* decodeSseStream(
         delta?: {
           content?: string
           reasoning_content?: string
-          tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>
+          tool_calls?: Array<{ id?: string; index?: number; function?: { name?: string; arguments?: string } }>
         }
         finish_reason?: string | null
       }>
@@ -87,6 +87,7 @@ export async function* decodeSseStream(
               id: tc.id,
               name: tc.function?.name,
               arguments: tc.function?.arguments,
+              ...(typeof tc.index === 'number' ? { index: tc.index } : {}),
             })),
           }
         : {}),

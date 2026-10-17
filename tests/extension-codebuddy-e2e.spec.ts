@@ -362,6 +362,115 @@ for (const [label, product] of [['codebuddy (mainland)', CODEBUDDY], ['buddy-int
     }
   })
 
+  it('maps canonical tool history to the upstream wire form (11148 pairing fix)', async () => {
+    await provisionActiveAccount(ext, product.id)
+    const capturedMessages: Array<unknown> = []
+    const pairWorkdir = mkdtempSync(join(tmpdir(), `gw-${product.id}-pair-`))
+    const pairExt = await startCodeBuddyExtension({
+      dataDir: join(pairWorkdir, 'data'),
+      secret: 'e2e-secret-0123456789abcdef',
+      fetcher: async (input, init) => {
+        const path = String(input)
+        if (path.includes('/v2/chat/completions')) {
+          const payload = JSON.parse(String(init?.body))
+          capturedMessages.push(payload.messages)
+          return new Response('data: {"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', { status: 200, headers: { 'content-type': 'text/event-stream' } })
+        }
+        return upstreamFetch(input, init)
+      },
+      product,
+    })
+    try {
+      process.env.GATEWAY_EXTENSION_TOKEN = 'e2e-ext-token'
+      await post(pairExt, '/v1/accounts', { accountId: 'acc-p1' })
+      const d = await get(pairExt, '/v1/accounts/acc-p1')
+      expect((d.json.account as Record<string, unknown>).status).toBe('active')
+      const call = async (messages: unknown) => {
+        const { status } = await post(pairExt, '/v1/chat', { accountId: 'acc-p1', model: 'glm-5.3', messages, stream: false })
+        expect(status).toBe(200)
+      }
+      // 1. well-formed multi-round history: canonical → OpenAI wire form
+      await call([
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: 'run things' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'call_a', name: 'bash', arguments: '{"command":"pwd"}' }, { id: 'call_b', name: 'bash', arguments: '{"command":"ls"}' }] },
+        { role: 'tool', content: '/tmp', toolCallId: 'call_a' },
+        { role: 'tool', content: 'f1', toolCallId: 'call_b' },
+        { role: 'assistant', content: 'both done.' },
+        { role: 'user', content: 'thanks' },
+      ])
+      expect(capturedMessages[0]).toEqual([
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: 'run things' },
+        { role: 'assistant', content: null, tool_calls: [
+          { id: 'call_a', type: 'function', function: { name: 'bash', arguments: '{"command":"pwd"}' } },
+          { id: 'call_b', type: 'function', function: { name: 'bash', arguments: '{"command":"ls"}' } },
+        ] },
+        { role: 'tool', tool_call_id: 'call_a', content: '/tmp' },
+        { role: 'tool', tool_call_id: 'call_b', content: 'f1' },
+        { role: 'assistant', content: 'both done.' },
+        { role: 'user', content: 'thanks' },
+      ])
+      // 2. missing result: the whole batch is dropped (a partial keep would
+      // leave a result-less call → upstream 400)
+      await call([
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'call_a', name: 'bash', arguments: '{}' }, { id: 'call_b', name: 'bash', arguments: '{}' }] },
+        { role: 'tool', content: '/tmp', toolCallId: 'call_a' },
+        { role: 'user', content: 'next' },
+      ])
+      expect(capturedMessages[1]).toEqual([
+        { role: 'system', content: 'You are a helpful assistant.' },
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: '' },
+        { role: 'user', content: 'next' },
+      ])
+      // 3. empty-name calls are never usable; their results are orphans
+      await call([
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'call_a', name: 'bash', arguments: '{}' }, { id: 'call_bad', name: '', arguments: '{}' }] },
+        { role: 'tool', content: '/tmp', toolCallId: 'call_a' },
+        { role: 'tool', content: 'x', toolCallId: 'call_bad' },
+        { role: 'user', content: 'next' },
+      ])
+      expect(capturedMessages[2]).toEqual([
+        { role: 'system', content: 'You are a helpful assistant.' },
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: null, tool_calls: [{ id: 'call_a', type: 'function', function: { name: 'bash', arguments: '{}' } }] },
+        { role: 'tool', tool_call_id: 'call_a', content: '/tmp' },
+        { role: 'user', content: 'next' },
+      ])
+      // 4. orphan result without any assistant call → dropped
+      await call([
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: 'no calls here' },
+        { role: 'tool', content: 'stray', toolCallId: 'call_x' },
+        { role: 'user', content: 'next' },
+      ])
+      expect(capturedMessages[3]).toEqual([
+        { role: 'system', content: 'You are a helpful assistant.' },
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: 'no calls here' },
+        { role: 'user', content: 'next' },
+      ])
+      // 5. empty arguments string normalizes to '{}'
+      await call([
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'call_a', name: 'bash', arguments: '' }] },
+        { role: 'tool', content: 'ok', toolCallId: 'call_a' },
+      ])
+      expect(capturedMessages[4]).toEqual([
+        { role: 'system', content: 'You are a helpful assistant.' },
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: null, tool_calls: [{ id: 'call_a', type: 'function', function: { name: 'bash', arguments: '{}' } }] },
+        { role: 'tool', tool_call_id: 'call_a', content: 'ok' },
+      ])
+    } finally {
+      pairExt.server.close()
+      rmSync(pairWorkdir, { force: true, recursive: true })
+    }
+  })
+
   it('streams chunks as SSE chunk events', async () => {
         await provisionActiveAccount(ext, product.id)
         const res = await fetch(`${ext.endpointUrl}/v1/chat`, {

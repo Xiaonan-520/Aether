@@ -80,3 +80,39 @@
 - Core/Manager：**1.2.6**（healthy）；codebuddy/buddy-intl 扩展：**1.0.3**；workbuddy 1.0.3、workbuddycn 1.0.6；4 账号 active。
 - 生产 ai-gateway：未触碰（Up 2 weeks+）。
 - 本轮执行过的修改：**无**（仅只读诊断与最小化上游探测，临时 key 均已撤销）。
+
+---
+
+## 修复实施记录（2026-10-17，授权后执行）
+
+### 改动文件
+| 层 | 文件 | 改动 |
+|---|---|---|
+| Extension | `src/extensions/codebuddy/main.ts` | 新增 `toUpstreamMessages`：canonical→OpenAI wire 映射（tool_calls 包装、tool_call_id、content:null 规范、arguments 空串兜底 `{}`）+ `resolveToolPairing` 同型防御（一批调用全部有结果才保留；空名不可用；孤儿结果剔除）。版本 1.0.3→**1.0.5** |
+| Core | `src/protocol/openai/serialize.ts` | 流式 delta：`name` 仅在非空时输出（不再发 `name:""` 毒化客户端历史）；index 优先取片段自带的上游 index |
+| Core | `src/protocol/openai/sse.ts` | decode 保留上游 `tool_calls[].index`（并行调用交错分片必需） |
+| Core | `src/core/types.ts` | `ChatChunk.toolCalls[]` 增加可选 `index` |
+
+Core 1.2.6 → **1.2.8**（1.2.7 为第一轮部署，1.2.8 含 index 透传）。
+
+### 测试
+- 新增 E2E「maps canonical tool history to the upstream wire form (11148 pairing fix)」：完整多轮映射 / 缺结果整批剔除 / 空名剔除+孤儿结果清除 / 无调用孤儿结果丢弃 / 空 arguments 兜底 `{}` —— 双产品实例 5 组断言
+- 新增 Core 流式协议测试：name 仅非空输出（帧上永无 `"name"` 空串）、并行调用 index [0,1] 稳定、交错分片 index 透传
+- codebuddy E2E **40/40**；Core 全量 **694 passed | 2 skipped**（51 文件）；typecheck 全绿
+
+### 部署
+Core/Manager 1.2.8 healthy；codebuddy/buddy-intl 1.0.5 upgrade 200 自动重注册（workbuddy 1.0.3 / workbuddycn 1.0.6 未动）；4 账号 active；凭据卷未动；生产 ai-gateway 未触碰。
+
+### 真实上游多轮验证（流式，临时 key 已撤销）
+| 步骤 | 结果 |
+|---|---|
+| 轮1 单工具 | finish=tool_calls，`{"command":"ls -la"}`，**0 个 name:"" 帧** ✅ |
+| 轮2 结果回传+并行双工具 | **2 个调用正确分离**：bash `{pwd}`、calc `{2+3}`，各自独立 id ✅（修复前叠成一个畸形调用）|
+| 轮3 双结果回传→最终回答 | 200："Results: pwd: /home/x… 2+3: **5**" ✅ |
+| 非流式聊天 | 200 "ok" ✅ |
+| Quota 回归 | 4 provider 全 known:true（83.93/2318.97/1418/100）|
+
+### 已证实 vs 未验证
+- ✅ 已证实：wire 映射正确（E2E 断言捕获的上游 payload）；空名帧消除；并行 index 稳定；多轮配对完整；11148 的两条成因路径（孤儿 tool 消息+空名历史）在上游 wire 上已不可能产生
+- ⚠️ 未验证：用户真实 Pi 长会话中 11148 是否复现（需该机实际使用确认——历史里已持久化的空名块在新会话中不再产生，但旧会话残留需 Pi 侧新开会话规避）；上游 11148 的确切触发阈值（黑盒）
+- 回滚方案：Core 镜像回退 1.2.6（remove+reinstall ext 1.0.3）；ext 回退镜像 tag 1.0.3

@@ -75,7 +75,7 @@ function codebuddyManifestFor(product: BuddyProduct, extensionId?: string): Exte
     apiVersion: '1.0',
     extension: {
       id: extId,
-      version: '1.0.3',
+      version: '1.0.5',
       displayName: product.displayName,
       description: `CodeBuddy-family provider extension (${product.id}) — external-link login, chat, check-in credit`,
       license: 'MIT',
@@ -206,6 +206,73 @@ export async function startCodeBuddyExtension(opts: CodeBuddyExtensionOptions = 
   // -- upstream operations ---------------------------------------------------
 
   /**
+   * Canonical messages → upstream OpenAI wire form.
+   *
+   * The upstream validates that every `role:'tool'` message pairs with the
+   * preceding assistant's `tool_calls` (code 11148 "tool calls and tool
+   * results do not match") and rejects empty `function.name` values (11133),
+   * so the wire must be built defensively:
+   *
+   * - canonical `assistant.toolCalls` ({id,name,arguments}) → OpenAI
+   *   `tool_calls:[{id,type:'function',function:{name,arguments}}]`, with
+   *   `content:null` when the assistant had no text (OpenAI norm);
+   * - canonical `tool.toolCallId` → `tool_call_id`;
+   * - a batch of tool_calls is only kept when **every** usable call in it
+   *   received a result (partial keep would leave a result-less call → 400);
+   *   calls with an empty name are never usable;
+   * - orphan tool results (no matching kept call) are dropped.
+   *
+   * Same defensive posture as the dsh harness project (resolveToolPairing):
+   * dropping one broken round beats letting the upstream kill the whole
+   * conversation.
+   */
+  function toUpstreamMessages(messages: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+    const resultIds = new Set<string>()
+    for (const m of messages) {
+      if (m.role === 'tool' && typeof m.toolCallId === 'string' && m.toolCallId) resultIds.add(m.toolCallId)
+    }
+    const keepCallIds = new Set<string>()
+    for (const m of messages) {
+      if (m.role !== 'assistant' || !Array.isArray(m.toolCalls)) continue
+      const calls = m.toolCalls as Array<Record<string, unknown>>
+      const usable = calls.filter((tc) => typeof tc.name === 'string' && tc.name !== '')
+      if (usable.length === 0) continue
+      if (usable.every((tc) => resultIds.has(String(tc.id)))) {
+        for (const tc of usable) keepCallIds.add(String(tc.id))
+      }
+    }
+    const wire: Array<Record<string, unknown>> = []
+    for (const m of messages) {
+      if (m.role === 'assistant') {
+        const calls = Array.isArray(m.toolCalls) ? (m.toolCalls as Array<Record<string, unknown>>) : []
+        const kept = calls
+          .filter((tc) => keepCallIds.has(String(tc.id)))
+          .map((tc) => ({
+            id: String(tc.id),
+            type: 'function' as const,
+            function: { name: String(tc.name), arguments: typeof tc.arguments === 'string' && tc.arguments.trim() !== '' ? tc.arguments : '{}' },
+          }))
+        const text = typeof m.content === 'string' ? m.content : ''
+        wire.push({
+          role: 'assistant',
+          // OpenAI norm: empty text + tool calls → content must be null.
+          content: text.length === 0 && kept.length > 0 ? null : text,
+          ...(kept.length > 0 ? { tool_calls: kept } : {}),
+        })
+        continue
+      }
+      if (m.role === 'tool') {
+        const id = typeof m.toolCallId === 'string' ? m.toolCallId : ''
+        if (!id || !keepCallIds.has(id)) continue // orphan result → 11148
+        wire.push({ role: 'tool', tool_call_id: id, content: typeof m.content === 'string' ? m.content : '' })
+        continue
+      }
+      wire.push({ role: m.role, content: typeof m.content === 'string' ? m.content : '' })
+    }
+    return wire
+  }
+
+  /**
    * Buddy upstream rejects requests whose first message is not a system
    * prompt (code 11128); prepend a neutral default only when missing.
    * `stream` is always true upstream (code 11101 otherwise); a non-streaming
@@ -218,9 +285,10 @@ export async function startCodeBuddyExtension(opts: CodeBuddyExtensionOptions = 
     const sep = rawModel.indexOf('::')
     const model = sep > 0 ? rawModel.slice(sep + 2) : rawModel // upstream gets the bare id, never the namespace
     const messages = Array.isArray(body.messages) ? (body.messages as Array<Record<string, unknown>>) : []
-    const withSystem = messages.length > 0 && messages[0]?.role === 'system'
-      ? messages
-      : [{ role: 'system', content: 'You are a helpful assistant.' }, ...messages]
+    const mapped = toUpstreamMessages(messages)
+    const withSystem = mapped.length > 0 && mapped[0]?.role === 'system'
+      ? mapped
+      : [{ role: 'system', content: 'You are a helpful assistant.' }, ...mapped]
     const payload: Record<string, unknown> = { model, messages: withSystem, stream: true }
     if (typeof body.max_tokens === 'number') payload.max_tokens = body.max_tokens
     if (typeof body.temperature === 'number') payload.temperature = body.temperature

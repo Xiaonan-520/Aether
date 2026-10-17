@@ -73,11 +73,21 @@ export function serializeChatChunk(
   if (chunk.text !== '') delta.content = chunk.text
   if (chunk.reasoning !== undefined) delta.reasoning_content = chunk.reasoning
   if (chunk.toolCalls !== undefined) {
+    // Extension chunks emit per-frame fragments of the same logical call
+    // sequence; the fragment list position IS the stable wire index (resetting
+    // it per frame would fold parallel calls into index 0). The name is only
+    // sent when actually present — OpenAI clients treat an explicit name field
+    // (even "") as authoritative, so serializing `name:''` on argument-delta
+    // frames would overwrite the real name downstream and poison history with
+    // empty-name tool calls (upstream then 400s with 11148/11133).
     delta.tool_calls = chunk.toolCalls.map((tc, i) => ({
-      index: i,
+      index: typeof tc.index === 'number' ? tc.index : i,
       ...(tc.id ? { id: tc.id } : {}),
       type: 'function',
-      function: { name: tc.name ?? '', arguments: tc.arguments ?? '' },
+      function: {
+        ...(tc.name ? { name: tc.name } : {}),
+        arguments: tc.arguments ?? '',
+      },
     }))
   }
   return {

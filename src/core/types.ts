@@ -176,8 +176,10 @@ export interface ChatChunk {
   finishReason?: 'stop' | 'length' | 'tool_calls' | null
   /** accumulated usage for final chunk */
   usage?: { promptTokens?: number; completionTokens?: number }
-  /** streamed-in tool call pieces */
-  toolCalls?: Array<{ id?: string; name?: string; arguments?: string }>
+  /** streamed-in tool call pieces. `index` is the upstream tool_calls[]
+   * position when known — parallel calls interleave fragments, so the wire
+   * index must survive decoding (array position alone would fold them). */
+  toolCalls?: Array<{ id?: string; name?: string; arguments?: string; index?: number }>
 }
 
 export interface ChatResult {
