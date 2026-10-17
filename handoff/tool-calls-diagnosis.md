@@ -46,3 +46,32 @@ Pi Agent 输出 Bash 工具调用（pwd / ls -la / git --version / which flutter
 
 ## 需要你确认的事项
 - Pi 侧使用的请求格式（stream=true/false）——修复后两条路径均正常，但如果 Pi 有本地工具调用解析逻辑（如 DSML 文本解析），建议升级后观察一轮再清理
+
+---
+
+## 1.2.6 部署记录（2026-10-17，授权后执行）
+
+### 部署版本（实测运行）
+| 组件 | 版本 | 状态 |
+|---|---|---|
+| Core / Manager | 1.2.5 → **1.2.6** | healthy |
+| workbuddy | 1.0.2 → **1.0.3** | healthy，upgrade 200 自动重注册 |
+| workbuddycn | 1.0.5 → **1.0.6** | healthy，upgrade 200 |
+| codebuddy | 1.0.1 → **1.0.2** | installed+running |
+| buddy-intl | 1.0.1 → **1.0.2** | installed+running |
+| 生产 ai-gateway | 未触碰 | Up 2 weeks |
+
+全程 0 token mismatch / chat.fail；4 账号全部 active；凭据卷未动。
+
+### 流式最小验证（真实上游，临时 key 已撤销）
+1. **流式普通聊天**（workbuddy::glm-5.3）→ 200，8 帧 + [DONE]
+2. **流式工具调用** → finish=tool_calls，**id=`call_1f09dd2c…`、name=bash、arguments=`{"command": "pwd"}` 完整**
+3. **工具结果回传 → 最终回答** → 200："The result of running `pwd` is: /home/xiaonan/agent-workspace …"——完整闭环 ✅
+
+### 回归
+- Quota：4 provider 全部 known:true（84.02 / 2416.69 / 500 / 100）
+- codebuddy 流式抽查 200 + [DONE]
+- 非流式路径按授权不再扩大线上测试（E2E 36/36 已覆盖）
+- 部署日志 0 error/fail
+
+**状态：等待用户 Pi 端真实使用验证。不再进行其他操作。**
