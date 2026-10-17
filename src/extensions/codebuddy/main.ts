@@ -75,7 +75,7 @@ function codebuddyManifestFor(product: BuddyProduct, extensionId?: string): Exte
     apiVersion: '1.0',
     extension: {
       id: extId,
-      version: '1.0.1',
+      version: '1.0.2',
       displayName: product.displayName,
       description: `CodeBuddy-family provider extension (${product.id}) — external-link login, chat, check-in credit`,
       license: 'MIT',
@@ -498,6 +498,11 @@ export async function startCodeBuddyExtension(opts: CodeBuddyExtensionOptions = 
       let reasoning = ''
       let finishReason: string | null = null
       let usage: Record<string, unknown> | undefined
+      // Fold streamed tool_calls (indexed fragments) into complete calls for
+      // the non-streaming client — otherwise finish_reason='tool_calls'
+      // arrives with no actionable calls.
+      const toolOrder: number[] = []
+      const toolMap = new Map<number, { id?: string; name?: string; arguments: string }>()
       try {
         const upstream = await upstreamChat(accountId, body)
         for await (const chunk of decodeSseStream(upstream.body as unknown as AsyncIterable<Uint8Array>)) {
@@ -505,6 +510,22 @@ export async function startCodeBuddyExtension(opts: CodeBuddyExtensionOptions = 
           if (chunk.reasoning) reasoning += chunk.reasoning
           if (chunk.finishReason) finishReason = chunk.finishReason
           if (chunk.usage) usage = chunk.usage as Record<string, unknown>
+          if (chunk.toolCalls) {
+            for (const call of chunk.toolCalls) {
+              // decodeSseStream emits per-frame fragments: the first frame of a
+              // call carries id+name, argument deltas follow on later frames
+              // with no id. A fragment with no id continues the last call.
+              const last = toolOrder.length > 0 ? toolMap.get(toolOrder[toolOrder.length - 1]) : undefined
+              if (call.id || !last) {
+                const entry = { id: call.id, name: call.name, arguments: call.arguments ?? '' }
+                toolMap.set(toolOrder.length, entry)
+                toolOrder.push(toolOrder.length)
+              } else {
+                if (call.name) last.name = call.name
+                if (call.arguments) last.arguments += call.arguments
+              }
+            }
+          }
         }
       } catch (err) {
         const e = err as Error & { upKind?: string; upStatus?: number }
@@ -513,6 +534,9 @@ export async function startCodeBuddyExtension(opts: CodeBuddyExtensionOptions = 
       const out: Record<string, unknown> = { content, finishReason: finishReason ?? 'stop' }
       if (reasoning !== '') out.reasoning = reasoning
       if (usage) out.usage = usage
+      if (toolOrder.length > 0) {
+        out.toolCalls = toolOrder.map((i) => toolMap.get(i)!)
+      }
       return send(res, 200, out)
     }
 

@@ -36,6 +36,17 @@ export function serializeChatCompletion(
           role: 'assistant',
           content: result.content,
           ...(result.reasoning !== undefined ? { reasoning_content: result.reasoning } : {}),
+          ...(result.toolCalls !== undefined && result.toolCalls.length > 0
+            ? {
+                // Standard OpenAI tool_calls shape; arguments arrive as the
+                // upstream's raw JSON text, unchanged.
+                tool_calls: result.toolCalls.map((tc, i) => ({
+                  id: tc.id ?? `call_${i}`,
+                  type: 'function',
+                  function: { name: tc.name ?? '', arguments: tc.arguments ?? '' },
+                })),
+              }
+            : {}),
         },
         finish_reason: result.finishReason,
       },

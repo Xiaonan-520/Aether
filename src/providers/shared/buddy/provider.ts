@@ -276,15 +276,31 @@ export function createBuddyProvider(product: BuddyProduct, fetcher: Fetcher = fe
     let reasoning = ''
     let finishReason = 'stop'
     let usage: ChatResult['usage']
+    const toolCalls: NonNullable<ChatResult['toolCalls']> = []
     for await (const chunk of streamChat(response)) {
       content += chunk.text
       if (chunk.reasoning) reasoning += chunk.reasoning
       if (chunk.usage) usage = chunk.usage
       if (chunk.finishReason) finishReason = chunk.finishReason
+      // fold streamed tool call fragments into complete calls
+      if (chunk.toolCalls) {
+        for (const tc of chunk.toolCalls) {
+          const last = toolCalls[toolCalls.length - 1]
+          // a fragment with an id starts a new call; without one it continues
+          // the previous call's arguments
+          if (tc.id || !last) {
+            toolCalls.push({ id: tc.id, name: tc.name, arguments: tc.arguments ?? '' })
+          } else {
+            if (tc.name) last.name = tc.name
+            last.arguments += tc.arguments ?? ''
+          }
+        }
+      }
     }
     const result: ChatResult = { content, finishReason }
     if (reasoning !== '') result.reasoning = reasoning
     if (usage) result.usage = usage
+    if (toolCalls.length > 0) result.toolCalls = toolCalls
     return result
   }
 

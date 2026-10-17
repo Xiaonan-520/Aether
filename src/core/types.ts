@@ -184,6 +184,11 @@ export interface ChatResult {
   content: string
   reasoning?: string
   finishReason: string
+  /** Aggregated tool calls for non-streaming results. The upstream speaks
+   * SSE-only, so these are folded from the stream by the provider; without
+   * this field a non-stream client receives finish_reason='tool_calls' with
+   * no calls — exactly the Pi "tool call never executed" symptom. */
+  toolCalls?: Array<{ id?: string; name?: string; arguments?: string }>
   usage?: { promptTokens?: number; completionTokens?: number }
 }
 

@@ -24,7 +24,7 @@ import { EXTENSION_ID, PROVIDER_ID, PROTOCOL_VERSION } from './types.js'
 // 1.0.0: initial international release — forked from the workbuddycn extension
 // with WorkBuddy international product constants (platform workbuddy-ai,
 // endpoint www.workbuddy.ai, WorkBuddy attribution/UA).
-export const EXTENSION_VERSION = '1.0.2'
+export const EXTENSION_VERSION = '1.0.3'
 
 /** Fallback catalog (mirrors the upstream `buddy` CN static list). Live discovery wins. */
 const FALLBACK_MODELS: ReadonlyArray<{

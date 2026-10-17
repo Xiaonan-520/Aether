@@ -224,7 +224,74 @@ for (const [label, product] of [['codebuddy (mainland)', CODEBUDDY], ['buddy-int
         expect(json.usage).toMatchObject({ promptTokens: 1, completionTokens: 2 })
       })
 
-      it('streams chunks as SSE chunk events', async () => {
+      it('folds streamed tool_calls into the non-streaming result (Pi bash-not-executed fix)', async () => {
+    await provisionActiveAccount(ext, product.id)
+    // override chat stub with tool_calls fragments
+    const realFetch = upstreamFetch
+    const withTools: typeof fetch = async (input, init) => {
+      const path = String(input)
+      if (path.includes('/v2/chat/completions')) {
+        const sse = [
+          'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"bash","arguments":""}}]}}]}',
+          'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\\"command\\\":\\\"pwd\\\"}"}}]}}]}',
+          'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+          'data: [DONE]',
+        ].join('\n\n') + '\n\n'
+        return new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+      }
+      return realFetch(input, init)
+    }
+    void withTools
+    // direct module-level fetcher can't be swapped; instead assert through the
+    // existing chat stub by relying on upstreamFetch — tool_calls frames are
+    // only produced when the stub returns them, so emulate via a second
+    // extension instance dedicated to this test.
+    const toolWorkdir = mkdtempSync(join(tmpdir(), `gw-${product.id}-tool-`))
+    const toolExt = await startCodeBuddyExtension({
+      dataDir: join(toolWorkdir, 'data'),
+      secret: 'e2e-secret-0123456789abcdef',
+      fetcher: async (input, init) => {
+        const path = String(input)
+        if (path.includes('/v2/plugin/auth/state')) return realFetch(input, init)
+        if (path.includes('/v2/plugin/auth/token?')) return realFetch(input, init)
+        if (path.includes('/v2/plugin/login/account?')) return realFetch(input, init)
+        if (path.includes('/v3/config')) return realFetch(input, init)
+        if (path.includes('/v2/chat/completions')) {
+          const sse = [
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"bash","arguments":""}}]}}]}',
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\\"command\\\":\\\"pwd\\\"}"}}]}}]}',
+            'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+            'data: [DONE]',
+          ].join('\n\n') + '\n\n'
+          return new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+        }
+        return realFetch(input, init)
+      },
+      product,
+    })
+    try {
+      process.env.GATEWAY_EXTENSION_TOKEN = 'e2e-ext-token'
+      await post(toolExt, '/v1/accounts', { accountId: 'acc-t1' })
+      const d = await get(toolExt, '/v1/accounts/acc-t1')
+      expect((d.json.account as Record<string, unknown>).status).toBe('active')
+      const { status, json } = await post(toolExt, '/v1/chat', {
+        accountId: 'acc-t1',
+        model: 'glm-5.3',
+        messages: [{ role: 'user', content: 'run pwd' }],
+        stream: false,
+      })
+      expect(status).toBe(200)
+      expect(json.finishReason).toBe('tool_calls')
+      expect(json.toolCalls).toEqual([
+        { id: 'call_1', name: 'bash', arguments: '{"command":"pwd"}' },
+      ])
+    } finally {
+      toolExt.server.close()
+      rmSync(toolWorkdir, { force: true, recursive: true })
+    }
+  })
+
+  it('streams chunks as SSE chunk events', async () => {
         await provisionActiveAccount(ext, product.id)
         const res = await fetch(`${ext.endpointUrl}/v1/chat`, {
           method: 'POST',

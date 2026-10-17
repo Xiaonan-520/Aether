@@ -174,6 +174,8 @@ export interface ChatResult {
   content: string
   reasoning?: string
   finishReason: string
+  /** Aggregated tool calls for non-streaming results (mirrors the Core type). */
+  toolCalls?: Array<{ id?: string; name?: string; arguments?: string }>
   usage?: { promptTokens?: number; completionTokens?: number }
 }
 

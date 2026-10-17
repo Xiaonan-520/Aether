@@ -173,3 +173,28 @@ describe('developer role normalization (OpenAI GPT-5 instruction role)', () => {
     expect(req.messages[3]).toMatchObject({ role: 'tool', toolCallId: 't1' })
   })
 })
+
+describe('non-streaming tool_calls round-trip (Pi bash-not-executed fix)', () => {
+  it('serializeChatCompletion emits standard tool_calls from ChatResult.toolCalls', async () => {
+    const { serializeChatCompletion } = await import('../src/protocol/openai/serialize.js')
+    const body = serializeChatCompletion(
+      {
+        content: '',
+        finishReason: 'tool_calls',
+        toolCalls: [{ id: 'call_x', name: 'bash', arguments: '{"command":"pwd"}' }],
+      },
+      'workbuddy::glm-5.3',
+    )
+    const msg = (body.choices as Array<{ message: Record<string, unknown> }>)[0].message
+    expect(msg.tool_calls).toEqual([
+      { id: 'call_x', type: 'function', function: { name: 'bash', arguments: '{"command":"pwd"}' } },
+    ])
+    expect(body.choices[0].finish_reason).toBe('tool_calls')
+  })
+
+  it('omits tool_calls when the result has none', async () => {
+    const { serializeChatCompletion } = await import('../src/protocol/openai/serialize.js')
+    const body = serializeChatCompletion({ content: 'hi', finishReason: 'stop' }, 'm')
+    expect('tool_calls' in (body.choices as Array<{ message: Record<string, unknown> }>)[0].message).toBe(false)
+  })
+})

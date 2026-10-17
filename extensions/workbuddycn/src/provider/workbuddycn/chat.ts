@@ -311,6 +311,12 @@ export async function chatNonStreaming(
   const result: ChatResult = { content, finishReason }
   if (reasoning.length > 0) result.reasoning = reasoning
   if (usage) result.usage = usage
+  // Non-streaming clients still need the tool calls — without them a
+  // finish_reason='tool_calls' result is unactionable (Pi's "tool never
+  // executed" symptom).
+  if (toolOrder.length > 0) {
+    result.toolCalls = toolOrder.map((i) => toolMap.get(i)!)
+  }
   return result
 }
 
