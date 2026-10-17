@@ -76,7 +76,7 @@ function codebuddyManifestFor(product: BuddyProduct, extensionId?: string): Exte
     apiVersion: '1.0',
     extension: {
       id: extId,
-      version: '1.0.6',
+      version: '1.0.7',
       displayName: product.displayName,
       description: `CodeBuddy-family provider extension (${product.id}) — external-link login, chat, check-in credit`,
       license: 'MIT',
@@ -436,7 +436,17 @@ export async function startCodeBuddyExtension(opts: CodeBuddyExtensionOptions = 
   }
 
   function chunkToSseEvent(chunk: ChatChunk): string {
-    return `event: chunk\ndata: ${JSON.stringify(chunk)}\n\n`
+    // The shared decoder surfaces the upstream's fixed delta envelope, which
+    // carries empty `reasoning_content: ""` and `tool_calls: []` on nearly every
+    // frame. Strip those here so one upstream token cannot become several
+    // no-op frames downstream. Real values (non-empty text, non-empty
+    // reasoning, non-empty tool call fragments) pass through untouched.
+    const wire: ChatChunk = { text: chunk.text }
+    if (chunk.reasoning) wire.reasoning = chunk.reasoning
+    if (chunk.toolCalls?.length) wire.toolCalls = chunk.toolCalls
+    if (chunk.finishReason) wire.finishReason = chunk.finishReason
+    if (chunk.usage) wire.usage = chunk.usage
+    return `event: chunk\ndata: ${JSON.stringify(wire)}\n\n`
   }
 
   async function handleChatStream(accountId: string, body: Record<string, unknown>, res: ServerResponse): Promise<void> {
@@ -446,6 +456,15 @@ export async function startCodeBuddyExtension(opts: CodeBuddyExtensionOptions = 
     try {
       for await (const chunk of decodeSseStream(upstream.body as unknown as AsyncIterable<Uint8Array>)) {
         if (chunk.finishReason) done = true
+        // Drop no-op increments: the upstream sends a fixed delta envelope
+        // (`content`/`reasoning_content`/`tool_calls`) where most fields are
+        // empty, and the shared decoder surfaces "" / [] as real values. Emitting
+        // them turns one token into several empty downstream frames. Only
+        // forward fields that actually carry data; a finish-reason-only chunk is
+        // still forwarded because `done` must reach the client.
+        if (!chunk.finishReason && chunk.text === '' && !chunk.reasoning && !chunk.toolCalls?.length) {
+          continue
+        }
         res.write(chunkToSseEvent(chunk))
       }
       if (!done) res.write(chunkToSseEvent({ text: '', finishReason: 'stop' }))

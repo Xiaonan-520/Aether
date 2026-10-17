@@ -569,6 +569,241 @@ for (const [label, product] of [['codebuddy (mainland)', CODEBUDDY], ['buddy-int
       })
     })
 
+    describe('11128 channel-check compatibility', () => {
+      /** The confirmed fingerprint, assembled so this file's source stays clean. */
+      const TRIGGER = ['Main branch (you will', 'usually use this for PRs)'].join(' ')
+      const TRIGGER_LINE = `${TRIGGER}: main`
+
+      it('normalizes the git-context label in system content before it reaches upstream', async () => {
+        await provisionActiveAccount(ext, product.id)
+        let capturedBody = ''
+        const wd = mkdtempSync(join(tmpdir(), `gw-${product.id}-chan-`))
+        const chanExt = await startCodeBuddyExtension({
+          dataDir: join(wd, 'data'),
+          secret: 'e2e-secret-0123456789abcdef',
+          fetcher: async (input, init) => {
+            const path = String(input).replace(/^https:\/\/[^/]+/, '')
+            if (path.includes('/v2/chat/completions')) {
+              capturedBody = String(init?.body ?? '')
+              const sse = 'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+              return new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+            }
+            return upstreamFetch(input, init)
+          },
+          product,
+        })
+        try {
+          process.env.GATEWAY_EXTENSION_TOKEN = 'e2e-ext-token'
+          await provisionActiveAccount(chanExt, product.id)
+          const { status } = await post(chanExt, '/v1/chat', {
+            accountId: 'acc-c1',
+            model: 'glm-5.3',
+            messages: [
+              { role: 'system', content: `You are a coding agent.\n\n${TRIGGER_LINE}\n\nBe concise.` },
+              { role: 'user', content: 'hi' },
+            ],
+            stream: false,
+          })
+          expect(status).toBe(200)
+          // the fingerprint must not survive to the upstream wire
+          expect(capturedBody).not.toContain(TRIGGER)
+          expect(capturedBody).toContain('Main branch (for PRs)')
+          // the rest of the system prompt is preserved
+          expect(capturedBody).toContain('You are a coding agent.')
+          expect(capturedBody).toContain('Be concise.')
+        } finally {
+          chanExt.server.close()
+          rmSync(wd, { force: true, recursive: true })
+        }
+      })
+
+      it('normalizes the git-context label in replayed assistant text', async () => {
+        await provisionActiveAccount(ext, product.id)
+        let capturedBody = ''
+        const wd = mkdtempSync(join(tmpdir(), `gw-${product.id}-chan2-`))
+        const chanExt = await startCodeBuddyExtension({
+          dataDir: join(wd, 'data'),
+          secret: 'e2e-secret-0123456789abcdef',
+          fetcher: async (input, init) => {
+            const path = String(input).replace(/^https:\/\/[^/]+/, '')
+            if (path.includes('/v2/chat/completions')) {
+              capturedBody = String(init?.body ?? '')
+              const sse = 'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+              return new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+            }
+            return upstreamFetch(input, init)
+          },
+          product,
+        })
+        try {
+          process.env.GATEWAY_EXTENSION_TOKEN = 'e2e-ext-token'
+          await provisionActiveAccount(chanExt, product.id)
+          const { status } = await post(chanExt, '/v1/chat', {
+            accountId: 'acc-c1',
+            model: 'glm-5.3',
+            messages: [
+              { role: 'system', content: 'You are a coding agent.' },
+              { role: 'user', content: 'what is the label?' },
+              { role: 'assistant', content: `the label is ${TRIGGER_LINE}` },
+              { role: 'user', content: 'continue' },
+            ],
+            stream: false,
+          })
+          expect(status).toBe(200)
+          expect(capturedBody).not.toContain(TRIGGER)
+        } finally {
+          chanExt.server.close()
+          rmSync(wd, { force: true, recursive: true })
+        }
+      })
+
+      it('does NOT rewrite the Claude Code identity sentence (separate trigger, must not impersonate)', async () => {
+        await provisionActiveAccount(ext, product.id)
+        let capturedBody = ''
+        const wd = mkdtempSync(join(tmpdir(), `gw-${product.id}-chan3-`))
+        const identity = "You are Claude Code, Anthropic's official CLI for Claude."
+        const chanExt = await startCodeBuddyExtension({
+          dataDir: join(wd, 'data'),
+          secret: 'e2e-secret-0123456789abcdef',
+          fetcher: async (input, init) => {
+            const path = String(input).replace(/^https:\/\/[^/]+/, '')
+            if (path.includes('/v2/chat/completions')) {
+              capturedBody = String(init?.body ?? '')
+              const sse = 'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+              return new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+            }
+            return upstreamFetch(input, init)
+          },
+          product,
+        })
+        try {
+          process.env.GATEWAY_EXTENSION_TOKEN = 'e2e-ext-token'
+          await provisionActiveAccount(chanExt, product.id)
+          await post(chanExt, '/v1/chat', {
+            accountId: 'acc-c1',
+            model: 'glm-5.3',
+            messages: [
+              { role: 'system', content: identity },
+              { role: 'user', content: 'hi' },
+            ],
+            stream: false,
+          })
+          expect(capturedBody).toContain(identity)
+        } finally {
+          chanExt.server.close()
+          rmSync(wd, { force: true, recursive: true })
+        }
+      })
+    })
+
+    describe('empty delta suppression on the stream', () => {
+      it('does not forward empty reasoning_content / tool_calls frames', async () => {
+        await provisionActiveAccount(ext, product.id)
+        const wd = mkdtempSync(join(tmpdir(), `gw-${product.id}-empty-`))
+        // Reproduce the real buddy envelope: every frame carries all fields,
+        // most of them empty.
+        const env = (delta: Record<string, unknown>) =>
+          `data: ${JSON.stringify({ choices: [{ delta: { refusal: '', function_call: {}, extra_fields: {}, ...delta }, finish_reason: null }] })}`
+        const emptyExt = await startCodeBuddyExtension({
+          dataDir: join(wd, 'data'),
+          secret: 'e2e-secret-0123456789abcdef',
+          fetcher: async (input, init) => {
+            const path = String(input).replace(/^https:\/\/[^/]+/, '')
+            if (path.includes('/v2/chat/completions')) {
+              const sse = [
+                env({ role: 'assistant', content: '', reasoning_content: '', tool_calls: [] }),
+                env({ content: 'he', reasoning_content: '', tool_calls: [] }),
+                env({ content: 'y', reasoning_content: '', tool_calls: [] }),
+                'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+                'data: [DONE]',
+              ].join('\n\n') + '\n\n'
+              return new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+            }
+            return upstreamFetch(input, init)
+          },
+          product,
+        })
+        try {
+          process.env.GATEWAY_EXTENSION_TOKEN = 'e2e-ext-token'
+          await provisionActiveAccount(emptyExt, product.id)
+          const res = await fetch(`${emptyExt.endpointUrl}/v1/chat`, {
+            method: 'POST',
+            headers: authHeaders,
+            body: JSON.stringify({ accountId: 'acc-c1', model: 'glm-5.3', messages: [{ role: 'user', content: 'hi' }], stream: true }),
+          })
+          expect(res.status).toBe(200)
+          const text = await res.text()
+          const payloads = text.split('\n\n')
+            .filter((b) => b.includes('event: chunk'))
+            .map((b) => JSON.parse(b.split('data: ')[1]!) as Record<string, unknown>)
+            .filter((p) => !p.finishReason) // the terminal frame is legitimately empty
+          // only the two real content deltas survive; the empty envelope vanishes
+          expect(payloads).toHaveLength(2)
+          for (const p of payloads) {
+            expect(p.reasoning).toBeUndefined()
+            expect(p.toolCalls).toBeUndefined()
+            expect(typeof p.text).toBe('string')
+            expect((p.text as string).length).toBeGreaterThan(0)
+          }
+          expect(payloads.map((p) => p.text).join('')).toBe('hey')
+          expect(text).toContain('"finishReason":"stop"')
+        } finally {
+          emptyExt.server.close()
+          rmSync(wd, { force: true, recursive: true })
+        }
+      })
+
+      it('still forwards non-empty reasoning and real tool calls', async () => {
+        await provisionActiveAccount(ext, product.id)
+        const wd = mkdtempSync(join(tmpdir(), `gw-${product.id}-empty2-`))
+        const env = (delta: Record<string, unknown>) =>
+          `data: ${JSON.stringify({ choices: [{ delta: { refusal: '', extra_fields: {}, ...delta }, finish_reason: null }] })}`
+        const keepExt = await startCodeBuddyExtension({
+          dataDir: join(wd, 'data'),
+          secret: 'e2e-secret-0123456789abcdef',
+          fetcher: async (input, init) => {
+            const path = String(input).replace(/^https:\/\/[^/]+/, '')
+            if (path.includes('/v2/chat/completions')) {
+              const sse = [
+                env({ reasoning_content: 'thinking', content: '', tool_calls: [] }),
+                env({ reasoning_content: '', content: '', tool_calls: [{ index: 0, id: 'call_1', function: { name: 'bash', arguments: '{"command":"pwd"}' } }] }),
+                'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+                'data: [DONE]',
+              ].join('\n\n') + '\n\n'
+              return new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+            }
+            return upstreamFetch(input, init)
+          },
+          product,
+        })
+        try {
+          process.env.GATEWAY_EXTENSION_TOKEN = 'e2e-ext-token'
+          await provisionActiveAccount(keepExt, product.id)
+          const res = await fetch(`${keepExt.endpointUrl}/v1/chat`, {
+            method: 'POST',
+            headers: authHeaders,
+            body: JSON.stringify({ accountId: 'acc-c1', model: 'glm-5.3', messages: [{ role: 'user', content: 'hi' }], stream: true }),
+          })
+          const text = await res.text()
+          const payloads = text.split('\n\n')
+            .filter((b) => b.includes('event: chunk'))
+            .map((b) => JSON.parse(b.split('data: ')[1]!) as Record<string, unknown>)
+            .filter((p) => !p.finishReason) // the terminal frame is legitimately empty
+          expect(payloads.some((p) => p.reasoning === 'thinking')).toBe(true)
+          expect(payloads.some((p) => Array.isArray(p.toolCalls) && p.toolCalls.length > 0)).toBe(true)
+          expect(text).toContain('"finishReason":"tool_calls"')
+          // no empty shells anywhere
+          for (const p of payloads) {
+            expect(p.reasoning === '').toBe(false)
+            expect(Array.isArray(p.toolCalls) && p.toolCalls.length === 0).toBe(false)
+          }
+        } finally {
+          keepExt.server.close()
+          rmSync(wd, { force: true, recursive: true })
+        }
+      })
+    })
+
     describe('Core RemoteProvider seam', () => {
       it('mounts as a remote provider with namespaced model ids and a marker credential on login', async () => {
         await provisionActiveAccount(ext, product.id)
