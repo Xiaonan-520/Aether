@@ -191,6 +191,17 @@ export function minimaxManifestFor(product: MinimaxProduct, extensionId = produc
           name: m.name,
           capabilities: { vision: false, toolCall: true, streaming: true },
         })),
+        // Declarative quota contract (§13.1): the cloud credit/details endpoint
+        // exposes per-bucket remaining amounts (no total, no resetAt).
+        quotaResources: [
+          {
+            id: 'credits-*',
+            kind: 'credits',
+            unit: 'credits',
+            displayName: 'MiniMax credits (per grant bucket)',
+            fields: { remaining: true, total: false, used: false, resetAt: false },
+          },
+        ],
         actions: [
           {
             id: 'account-status',
@@ -467,6 +478,13 @@ export async function startMinimaxExtension(opts: MinimaxExtensionOptions = {}):
       throwUp(c.kind, c.message, res.status)
     }
     return res
+  }
+
+  /** Expiry date of the first grant bucket, for display only. */
+  function bucketExpiry(payload: Record<string, unknown> | undefined): string {
+    const details = payload && Array.isArray(payload.details) ? payload.details as Array<Record<string, unknown>> : []
+    const at = details.length > 0 ? details[0]!.expire_at_ms : undefined
+    return typeof at === 'number' ? new Date(at).toISOString().slice(0, 10) : 'n/a'
   }
 
   /**
@@ -786,21 +804,36 @@ export async function startMinimaxExtension(opts: MinimaxExtensionOptions = {}):
       const creditPayload = await cloudCall(accountId, MINIMAX_CREDIT_DETAILS_PATH, 'GET')
       const status = statusPayload ? parseMinimaxSigninStatus(statusPayload) : null
       const credit = creditPayload ? parseMinimaxCreditBalance(creditPayload) : null
-      // honest "unknown" when the cloud endpoints cannot be read
-      const quota = credit
-        ? {
-            known: true,
-            remaining: credit.total,
-            total: null,
-            resetAt: null,
-            lastUpdatedAt: now(),
-            rawJson: JSON.stringify({ daily: credit.daily, monthly: credit.monthly, recommended: credit.recommended }),
-          }
-        : { known: false, remaining: null, total: null, resetAt: null, lastUpdatedAt: now(), rawJson: null }
+
+      // QuotaSnapshotV1 (§13): one resource line per grant bucket so the
+      // Console shows real numbers. Only remaining is upstream-provided —
+      // total/used/resetAt are omitted rather than zero-filled.
+      const resources = credit && credit.total > 0
+        ? [
+            ...(credit.daily > 0 ? [{
+              id: 'credits-daily',
+              kind: 'credits' as const,
+              unit: 'credits',
+              displayName: `Daily grant (expires ${bucketExpiry(creditPayload)})`,
+              remaining: credit.daily,
+            }] : []),
+            ...(credit.monthly > 0 ? [{
+              id: 'credits-other',
+              kind: 'credits' as const,
+              unit: 'credits',
+              displayName: 'Other grants',
+              remaining: credit.monthly,
+            }] : []),
+          ]
+        : []
+
       return send(res, 200, {
-        quota,
-        checkin: status ?? null,
-        credit: credit ?? null,
+        accountId,
+        resources,
+        checkedAt: new Date(now()).toISOString(),
+        source: 'authoritative',
+        // supplemental check-in panel for the Console
+        ...(status ? { checkin: status } : {}),
       })
     }
 
