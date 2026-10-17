@@ -400,6 +400,21 @@ export class ExtensionManager {
     record.imageDigest = digest
 
     // 3. manifest → sanitized runtime spec (the conversion boundary)
+    // Operator env scoping: GW_OPERATOR_ENV may be either a flat map
+    // ({KEY: value} — applied to every extension) or scoped per extension id
+    // ({EXT_ID: {KEY: value}, '*': {KEY: value}} — '*' applies to all).
+    // Scoped entries win; this lets one manager host multi-product single
+    // images (e.g. codebuddy=buddy-intl for the intl install only).
+    const scopeOperatorEnv = (map: Record<string, unknown>, extensionId: string): Record<string, string> => {
+      const isScopedForm = Object.values(map).some((v) => typeof v === 'object' && v !== null)
+      if (!isScopedForm) return map as Record<string, string>
+      const scoped = map[extensionId]
+      const global = map['*']
+      return {
+        ...((typeof global === 'object' && global !== null ? global : {}) as Record<string, string>),
+        ...((typeof scoped === 'object' && scoped !== null ? scoped : {}) as Record<string, string>),
+      }
+    }
     const spec = sanitizeRuntime({
       manifest,
       image: { ...image, digest },
@@ -407,7 +422,7 @@ export class ExtensionManager {
         GATEWAY_EXTENSION_TOKEN: extensionToken,
         GATEWAY_EXTENSION_ID: extensionId,
       },
-      limits: { network: this.network, operatorEnv: this.operatorEnv },
+      limits: { network: this.network, operatorEnv: scopeOperatorEnv(this.operatorEnv, extensionId) },
     })
 
     // 4. create + start
