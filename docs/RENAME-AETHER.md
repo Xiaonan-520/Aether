@@ -55,16 +55,33 @@ GitHub 仓库改名**不会删除** GHCR 里以旧路径发布的包。旧 tag �
 两个 compose 文件现在写成：
 
 ```yaml
-image: ${GATEWAY_IMAGE_REPO:-ghcr.io/xiaonan-520/aether}:${GATEWAY_IMAGE_TAG:-latest}
+image: ${GATEWAY_IMAGE_REPO:-ghcr.io/xiaonan-520/multi-provider-ai-gateway}:${GATEWAY_IMAGE_TAG:-latest}
 ```
 
-要在迁移期继续用旧包，在 `.env` 里加一行即可，无需改文件：
+**默认值仍是旧路径**，因为它是目前唯一真实存在的包：截至改名时，所有已发布的
+镜像都在 `ghcr.io/xiaonan-520/multi-provider-ai-gateway` 下。默认指向一个还不
+存在的包会让 `docker compose pull` 直接失败。
+
+要提前切到新路径（等 CI 发布后），在 `.env` 里加一行即可，无需改文件：
 
 ```bash
-GATEWAY_IMAGE_REPO=ghcr.io/xiaonan-520/multi-provider-ai-gateway
+GATEWAY_IMAGE_REPO=ghcr.io/xiaonan-520/aether
 ```
 
-### 3.4 生产环境
+### 3.4 CI 的镜像路径行为（已实测）
+
+`.github/workflows/docker.yml` 用 `${GITHUB_REPOSITORY,,}` 推导镜像名，因此：
+
+- **改名时已经创建**的 run 仍推送到旧路径（`GITHUB_REPOSITORY` 在 run 创建时固化）；
+- **改名后新建**的 run 会推送到 `ghcr.io/xiaonan-520/aether`。
+
+已观察到的事实：改名提交 `d12e3fa` 的 CI run（`40090696482`）在改名瞬间创建，
+`build-and-push` 成功但推到了**旧路径**。新包 `aether` 目前尚不存在。
+
+因此本轮的顺序是：默认值保持旧路径 → 等下一次 push 触发的新 run 发布 aether 包
+→ 验证新包可拉取 → 再翻转默认值。翻转是独立的一行改动，不随本次改名一起做。
+
+### 3.5 生产环境
 
 生产 `ai-gateway:8080` **本轮没有做任何改动**，也没有部署新镜像。是否切换到新镜像
 路径、何时升级，是独立决策，见 `handoff/AGENT-HANDOFF-2026-10-24.md` 的 P0 项。
