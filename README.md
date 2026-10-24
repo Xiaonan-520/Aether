@@ -1,6 +1,9 @@
-# Multi-Provider AI Gateway
+# Aether
 
 [English](README.en.md) | 中文
+
+> 项目正式名称 **Aether**（曾用名 Multi-Provider AI Gateway）。仓库与镜像的迁移说明见
+> [docs/RENAME-AETHER.md](docs/RENAME-AETHER.md)。
 
 自托管的多 Provider AI 网关。对外暴露一个 OpenAI 兼容的 `/v1` 端点，对内管理一池 Provider 账号：路由、token 自动刷新、额度感知、故障切换、后台维护任务。凭据静态加密存储，永远不会出现在 API 响应或日志里。
 
@@ -63,8 +66,8 @@ Qoder 的聊天端点要求请求体由官方客户端的 WASM 模块生成。�
 ## 快速开始
 
 ```bash
-git clone https://github.com/Xiaonan-520/multi-provider-ai-gateway.git
-cd multi-provider-ai-gateway
+git clone https://github.com/Xiaonan-520/Aether.git
+cd Aether
 cp .env.example .env          # 填三个密钥，见下文配置
 docker compose up -d
 curl http://127.0.0.1:8080/healthz
@@ -208,6 +211,10 @@ Issue 和 PR 都欢迎。写 Provider 适配器请保持 Core 的 Provider 无�
 镜像由 GitHub Actions 构建，推送到 GHCR（`main` 分支每次 push 及所有 `v*` tag）：
 
 ```bash
+# 新的规范地址（仓库改名为 Aether 后 CI 会发布到这里）
+docker pull ghcr.io/xiaonan-520/aether:latest
+
+# 迁移期兼容地址：改名前的镜像仍保留在 GHCR，已有 tag 不受影响
 docker pull ghcr.io/xiaonan-520/multi-provider-ai-gateway:latest
 ```
 

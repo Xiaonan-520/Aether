@@ -47,7 +47,7 @@ export function ConsoleApp({
                   <path d="M12 12 3 7m9 5 9-5m-9 5v10" />
                 </svg>
               </span>
-              <span className="truncate">Gateway Console</span>
+              <span className="truncate">Aether Console</span>
             </a>
             <nav className="ml-2 hidden items-center gap-1 text-sm sm:flex" aria-label="Main">
               <a

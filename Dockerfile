@@ -1,4 +1,4 @@
-# Multi-Provider AI Gateway — multi-stage build
+# Aether — multi-stage build
 # Build stage compiles TS and rebuilds the native SQLite driver for the
 # runtime's Node ABI; runtime stage ships dist/ + production deps only.
 
@@ -27,9 +27,9 @@ RUN npm run build --prefix console
 FROM node:22-slim AS runtime
 # OCI labels: the source label lets GHCR link the package to this repository
 # so the package page and its access settings follow the repo.
-LABEL org.opencontainers.image.source="https://github.com/Xiaonan-520/multi-provider-ai-gateway"
-LABEL org.opencontainers.image.title="multi-provider-ai-gateway"
-LABEL org.opencontainers.image.description="Self-hosted, multi-provider, OpenAI-compatible AI gateway"
+LABEL org.opencontainers.image.source="https://github.com/Xiaonan-520/Aether"
+LABEL org.opencontainers.image.title="aether"
+LABEL org.opencontainers.image.description="Aether — self-hosted, multi-provider, OpenAI-compatible AI gateway"
 LABEL org.opencontainers.image.licenses="MIT"
 ENV NODE_ENV=production
 WORKDIR /app

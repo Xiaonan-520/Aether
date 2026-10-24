@@ -1,6 +1,10 @@
-# Multi-Provider AI Gateway
+# Aether
 
 English | [中文](README.md)
+
+> **Aether** is the project's formal name (formerly Multi-Provider AI Gateway).
+> See [docs/RENAME-AETHER.md](docs/RENAME-AETHER.md) for the repository and
+> image migration notes.
 
 Self-hosted, multi-provider, OpenAI-compatible AI gateway. It exposes a single
 `/v1` endpoint to any OpenAI-compatible client and, behind it, manages a pool
@@ -115,8 +119,8 @@ provided by this project.
 ## Quick Start
 
 ```bash
-git clone https://github.com/Xiaonan-520/multi-provider-ai-gateway.git
-cd multi-provider-ai-gateway
+git clone https://github.com/Xiaonan-520/Aether.git
+cd Aether
 cp .env.example .env          # fill in the three secrets (see Configuration)
 docker compose up -d
 curl http://127.0.0.1:8080/healthz
@@ -269,6 +273,11 @@ The image is built by GitHub Actions and published to GHCR on every push to
 `main` and every `v*` tag:
 
 ```bash
+# Canonical location once the repository is renamed to Aether
+docker pull ghcr.io/xiaonan-520/aether:latest
+
+# Migration-period compatibility: images published before the rename stay
+# available under the old path; existing tags are untouched.
 docker pull ghcr.io/xiaonan-520/multi-provider-ai-gateway:latest
 ```
 

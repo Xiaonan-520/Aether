@@ -7,7 +7,8 @@
 
 ## 0. 一分钟速览
 
-- 项目：`Xiaonan-520/multi-provider-ai-gateway`（OpenAI 兼容多上游网关）
+- 项目：**Aether**（曾用名 `multi-provider-ai-gateway`，OpenAI 兼容多上游网关）。
+  改名的范围与兼容性处理见 `docs/RENAME-AETHER.md`；镜像/容器尚未迁移。
 - HEAD：`2c0c0bf`，`main` 与 origin 同步，工作区干净（23 个历史未跟踪文件，勿动）
 - Phase 3 测试环境：`192.168.10.53:18080`，Core **1.2.10**，6 个扩展全 healthy/registered
 - **生产 `ai-gateway:8080` 全程禁止触碰**（旧镜像 2026-10-02，与本轮所有修复无关）

@@ -1,7 +1,7 @@
 {
-  "name": "ai-account-gateway",
+  "name": "aether",
   "version": "0.1.0",
-  "description": "Self-hosted, multi-provider, OpenAI-compatible AI gateway with unified account pool, token/quota management and failover.",
+  "description": "Aether — self-hosted, multi-provider, OpenAI-compatible AI gateway with unified account pool, token/quota management and failover.",
   "type": "module",
   "main": "dist/http/index.js",
   "scripts": {
