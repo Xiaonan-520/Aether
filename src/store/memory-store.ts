@@ -20,6 +20,8 @@ import type {
   StoreGateway,
   StoreResult,
   ApiKeyRecord,
+  AdminUserRecord,
+  AdminSessionRecord,
 } from './types.js'
 
 /** Local-timezone day key, e.g. `2026-10-01` (matches SQLite date() output). */
@@ -45,6 +47,8 @@ export class MemoryStore implements StoreGateway {
   private readonly events: Record<string, unknown>[] = []
   private readonly settings = new Map<string, unknown>()
   private readonly apiKeys = new Map<string, ApiKeyRecord>()
+  private readonly adminUsers = new Map<string, AdminUserRecord>()
+  private readonly adminSessions = new Map<string, AdminSessionRecord>()
 
   listAccounts(provider?: string): StoredAccount[] {
     return [...this.accounts.values()]
@@ -238,5 +242,94 @@ export class MemoryStore implements StoreGateway {
     if (!record) return { ok: false, error: `api key "${id}" not found` }
     this.apiKeys.set(id, { ...record, enabled: false, revokedAt: at })
     return { ok: true }
+  }
+
+  // -- admin identity ---------------------------------------------------------
+  createAdminUser(user: AdminUserRecord): StoreResult {
+    if (this.adminUsers.has(user.id)) {
+      return { ok: false, error: `admin user "${user.id}" already exists` }
+    }
+    // Mirrors the UNIQUE(email) index: this is what makes concurrent
+    // first-registration safe in the in-memory backend too.
+    for (const existing of this.adminUsers.values()) {
+      if (existing.email === user.email) {
+        return { ok: false, error: 'admin user email already exists' }
+      }
+    }
+    this.adminUsers.set(user.id, { ...user })
+    return { ok: true }
+  }
+
+  /**
+   * Atomic first-admin insert. JS is single-threaded, so the emptiness check
+   * and the insert below cannot interleave with another request's — that is
+   * exactly the guarantee the service needs, because scrypt runs asynchronously
+   * between its own count() and this call.
+   */
+  createFirstAdminUser(user: AdminUserRecord): StoreResult {
+    if (this.adminUsers.size > 0) {
+      return { ok: false, error: 'not_first' }
+    }
+    return this.createAdminUser(user)
+  }
+
+  getAdminUserByEmail(email: string): AdminUserRecord | undefined {
+    for (const record of this.adminUsers.values()) {
+      if (record.email === email) return { ...record }
+    }
+    return undefined
+  }
+
+  getAdminUserById(id: string): AdminUserRecord | undefined {
+    const record = this.adminUsers.get(id)
+    return record ? { ...record } : undefined
+  }
+
+  countAdminUsers(): number {
+    return this.adminUsers.size
+  }
+
+  // -- admin sessions ---------------------------------------------------------
+  createAdminSession(session: AdminSessionRecord): StoreResult {
+    if (this.adminSessions.has(session.id)) {
+      return { ok: false, error: `admin session "${session.id}" already exists` }
+    }
+    for (const existing of this.adminSessions.values()) {
+      if (existing.tokenHash === session.tokenHash) {
+        return { ok: false, error: 'admin session token collision' }
+      }
+    }
+    this.adminSessions.set(session.id, { ...session })
+    return { ok: true }
+  }
+
+  getAdminSessionByTokenHash(tokenHash: string): AdminSessionRecord | undefined {
+    for (const record of this.adminSessions.values()) {
+      if (record.tokenHash === tokenHash) return { ...record }
+    }
+    return undefined
+  }
+
+  touchAdminSession(id: string, at: number): void {
+    const record = this.adminSessions.get(id)
+    if (record) this.adminSessions.set(id, { ...record, lastUsedAt: at })
+  }
+
+  revokeAdminSession(id: string, at: number): boolean {
+    const record = this.adminSessions.get(id)
+    if (!record || record.revokedAt !== null) return false
+    this.adminSessions.set(id, { ...record, revokedAt: at })
+    return true
+  }
+
+  pruneAdminSessions(beforeMs: number): number {
+    let removed = 0
+    for (const [id, record] of this.adminSessions) {
+      if (record.expiresAt < beforeMs) {
+        this.adminSessions.delete(id)
+        removed++
+      }
+    }
+    return removed
   }
 }

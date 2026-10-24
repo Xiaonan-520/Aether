@@ -3,6 +3,14 @@
 # runtime's Node ABI; runtime stage ships dist/ + production deps only.
 
 FROM node:22-slim AS build
+# Optional build-time proxy for restricted networks (a local test box where
+# only an HTTP proxy can reach the Debian and npm registries). Empty by
+# default, so ordinary builds and CI are unaffected. Declared per stage
+# because the classic builder does not allow a global ARG/ENV block.
+ARG HTTP_PROXY=""
+ARG HTTPS_PROXY=""
+ARG NO_PROXY="localhost,127.0.0.1"
+ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY} NO_PROXY=${NO_PROXY}
 WORKDIR /build
 # better-sqlite3 needs build tools when no prebuilt binary matches
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -25,6 +33,11 @@ COPY console ./console
 RUN npm run build --prefix console
 
 FROM node:22-slim AS runtime
+# Same optional proxy args as the build stage. Scoped to the apt RUN below as
+# inline env assignments so no proxy setting is baked into the final image.
+ARG HTTP_PROXY=""
+ARG HTTPS_PROXY=""
+ARG NO_PROXY="localhost,127.0.0.1"
 # OCI labels: the source label lets GHCR link the package to this repository
 # so the package page and its access settings follow the repo.
 LABEL org.opencontainers.image.source="https://github.com/Xiaonan-520/Aether"
@@ -33,7 +46,8 @@ LABEL org.opencontainers.image.description="Aether — self-hosted, multi-provid
 LABEL org.opencontainers.image.licenses="MIT"
 ENV NODE_ENV=production
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
+RUN HTTP_PROXY="${HTTP_PROXY}" HTTPS_PROXY="${HTTPS_PROXY}" NO_PROXY="${NO_PROXY}" \
+    apt-get update && apt-get install -y --no-install-recommends curl \
   && rm -rf /var/lib/apt/lists/* \
   && groupadd -r gateway && useradd -r -g gateway gateway
 COPY --from=build /build/node_modules ./node_modules

@@ -139,4 +139,38 @@ export const MIGRATIONS: Migration[] = [
       `CREATE INDEX IF NOT EXISTS ix_api_keys_prefix ON api_keys(key_prefix)`,
     ],
   },
+  {
+    // Admin identity: exactly one operator account (email + scrypt digest) and
+    // its login sessions. Separate from api_keys (gateway keys) and from the
+    // Extension Manager's own DB — three independent trust domains.
+    //
+    // admin_users.email is UNIQUE and stores the normalized (trimmed,
+    // lowercased) address, so concurrent first-registration attempts collide on
+    // this index instead of creating two admins.
+    //
+    // admin_sessions stores only SHA-256(token); the token itself never lands
+    // on disk. Revocation stamps revoked_at; expiry is expires_at.
+    version: 3,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS admin_users (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS ix_admin_users_email ON admin_users(email)`,
+      `CREATE TABLE IF NOT EXISTS admin_sessions (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+        token_hash TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        last_used_at INTEGER,
+        revoked_at INTEGER
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS ix_admin_sessions_token ON admin_sessions(token_hash)`,
+      `CREATE INDEX IF NOT EXISTS ix_admin_sessions_user ON admin_sessions(user_id)`,
+    ],
+  },
 ]

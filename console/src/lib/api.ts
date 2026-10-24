@@ -45,20 +45,136 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(0, 'Network error — the gateway is unreachable')
   }
   if (res.status === 401) {
-    throw new ApiError(401, 'Unauthorized — check the admin token')
+    // The session may have expired or been revoked. Notify the shell so it can
+    // drop the stored credential and show the sign-in screen again.
+    notifyUnauthorized()
+    throw new ApiError(401, 'Session expired — please sign in again')
   }
   if (!res.ok) {
     let message = `Request failed (${res.status})`
     try {
-      const body = (await res.json()) as { error?: { message?: string } | string }
-      if (typeof body.error === 'string') message = body.error
+      const body = (await res.json()) as { error?: { message?: string } | string; message?: string }
+      if (typeof body.error === 'string') message = body.message ?? body.error
       else if (body.error?.message) message = body.error.message
+      else if (body.message) message = body.message
     } catch {
       // keep default message
     }
     throw new ApiError(res.status, message)
   }
   return (await res.json()) as T
+}
+
+// ---------------------------------------------------------------------------
+// Unauthorized broadcast
+// ---------------------------------------------------------------------------
+// Pages call the API independently, so a dead session is detected by whichever
+// request runs first. A tiny subscriber list lets the shell react once.
+const unauthorizedListeners = new Set<() => void>()
+
+export function onUnauthorized(fn: () => void): () => void {
+  unauthorizedListeners.add(fn)
+  return () => unauthorizedListeners.delete(fn)
+}
+
+function notifyUnauthorized(): void {
+  for (const fn of unauthorizedListeners) fn()
+}
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+// The session token is the ONLY credential the browser holds. It is stored in
+// sessionStorage (per-tab, cleared when the tab closes) and never in
+// localStorage, never in a cookie, and never written to the console.
+
+export interface AuthUser {
+  id: string
+  email: string
+  createdAt: number
+}
+
+export interface AuthStatus {
+  initialized: boolean
+  user?: AuthUser
+}
+
+export interface AuthSession {
+  token: string
+  expiresAt: number
+  user: AuthUser
+}
+
+export interface AuthMe {
+  user: AuthUser | null
+  staticToken: boolean
+  expiresAt: number | null
+}
+
+/** Public: no credential required. */
+export async function fetchAuthStatus(): Promise<AuthStatus> {
+  const res = await fetch('/api/auth/status', { headers: authHeaderIfAny() })
+  if (!res.ok) throw new ApiError(res.status, `Status check failed (${res.status})`)
+  return (await res.json()) as AuthStatus
+}
+
+export async function registerAdmin(email: string, password: string): Promise<AuthSession> {
+  return postAuth('/api/auth/register', email, password)
+}
+
+export async function loginAdmin(email: string, password: string): Promise<AuthSession> {
+  return postAuth('/api/auth/login', email, password)
+}
+
+async function postAuth(path: string, email: string, password: string): Promise<AuthSession> {
+  let res: Response
+  try {
+    res = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    })
+  } catch {
+    throw new ApiError(0, 'Network error — the gateway is unreachable')
+  }
+  if (!res.ok) {
+    let message = `Request failed (${res.status})`
+    try {
+      const body = (await res.json()) as { message?: string; error?: string }
+      if (body.message) message = body.message
+    } catch {
+      // keep default
+    }
+    throw new ApiError(res.status, message)
+  }
+  return (await res.json()) as AuthSession
+}
+
+/** Requires a credential; returns who the caller is. */
+export async function fetchMe(): Promise<AuthMe> {
+  return request<AuthMe>('/api/auth/me')
+}
+
+/** Revokes the session server-side (no-op for the static env token). */
+export async function logoutAdmin(): Promise<void> {
+  const token = getStoredToken()
+  try {
+    await fetch('/api/auth/logout', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    })
+  } catch {
+    // Best effort: the local credential is cleared either way. A network
+    // failure must not leave the user stuck on an authenticated screen.
+  }
+}
+
+function authHeaderIfAny(): Record<string, string> {
+  const token = getStoredToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
 // ---------------------------------------------------------------------------

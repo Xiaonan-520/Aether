@@ -1,0 +1,62 @@
+# Local-only test stack for the admin-auth work.
+#
+# This file is a SEPARATE compose project (`aether-auth-local`) with its own
+# network, volume and port. It never touches the phase3 or production stacks,
+# and it deliberately pins nothing from GHCR — it builds the current working
+# tree so the code under test is exactly what is in this checkout.
+#
+#   docker compose -p aether-auth-local -f docker-compose.authtest.yml up -d --build
+#   docker compose -p aether-auth-local -f docker-compose.authtest.yml logs -f
+#   docker compose -p aether-auth-local -f docker-compose.authtest.yml down
+#
+# Data lives in the named volume `aether-auth-local_data`. `down` keeps it;
+# use `down -v` only when you explicitly want a clean database.
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Local test builds only. On a network where the Debian/npm registries
+        # are only reachable through an HTTP proxy, set AUTH_TEST_BUILD_PROXY
+        # in your shell; otherwise these stay empty and the build is direct.
+        HTTP_PROXY: ${AUTH_TEST_BUILD_PROXY:-}
+        HTTPS_PROXY: ${AUTH_TEST_BUILD_PROXY:-}
+        NO_PROXY: localhost,127.0.0.1
+    image: local/aether-auth-test:local
+    container_name: aether-auth-local-gateway
+    ports:
+      # 18082 is outside every port used by the phase3 (18080) and
+      # production (8080) stacks.
+      - "127.0.0.1:18082:8080"
+    volumes:
+      - auth-local-data:/data
+    environment:
+      DATA_DIR: /data
+      # Throwaway test credentials — never real ones. Distinct from any
+      # value used by the deployed stacks.
+      GATEWAY_API_KEY: auth-test-gateway-key-not-a-real-secret
+      GATEWAY_SECRET: auth-test-secret-value-0123456789
+      GATEWAY_ADMIN_TOKEN: auth-test-static-admin-token
+      TZ: UTC
+      LOG_LEVEL: info
+      HTTP_HOST: 0.0.0.0
+      HTTP_PORT: "8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      start_period: 5s
+      retries: 12
+    stop_grace_period: 10s
+    restart: "no"
+
+volumes:
+  auth-local-data:
+    # Explicit name so it can never collide with gateway-data or the phase3
+    # volumes, even if the project name is changed.
+    name: aether-auth-local-data
+
+networks:
+  default:
+    name: aether-auth-local-net

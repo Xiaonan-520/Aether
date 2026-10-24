@@ -18,6 +18,7 @@ import { ConsoleService } from '../service/console-service.js'
 import { ExtensionService } from '../service/extension-service.js'
 import { LoginService } from '../service/login-service.js'
 import { ApiKeyService } from '../service/api-key-service.js'
+import { AdminAuthService, AuthError, type AdminUserView } from '../service/admin-auth-service.js'
 import { parseChatCompletionsRequest, OpenAIApiError } from '../protocol/openai/parse.js'
 import {
   serializeChatCompletion,
@@ -36,6 +37,7 @@ export interface GatewayApp {
   admin: AdminService
   login: LoginService
   apiKeys: ApiKeyService
+  adminAuth: AdminAuthService
   listen: (port: number, host: string) => Promise<unknown>
 }
 
@@ -52,6 +54,34 @@ function bearerToken(header: string | undefined): string | null {
   return header.slice(7)
 }
 
+/** Admin identity attached by the /api guard when a session token was used. */
+type AuthUserView = AdminUserView
+
+/** Context variable set by the admin guard; absent for the static env token. */
+declare module 'hono' {
+  interface ContextVariableMap {
+    adminUser: AdminUserView | undefined
+  }
+}
+
+async function readJsonObject(c: Context): Promise<Record<string, unknown>> {
+  try {
+    const body = await c.req.json()
+    return body && typeof body === 'object' && !Array.isArray(body)
+      ? (body as Record<string, unknown>)
+      : {}
+  } catch {
+    return {}
+  }
+}
+
+/** Expiry of the session behind this request, or null for the static token. */
+function sessionExpiryOf(c: Context, auth: AdminAuthService): number | null {
+  const token = bearerToken(c.req.header('Authorization'))
+  if (!token) return null
+  return auth.sessionExpiry(token)
+}
+
 export function createGatewayApp(ctx: ServiceContext): GatewayApp {
   const chat = new ChatService(ctx)
   const models = new ModelService(ctx)
@@ -59,6 +89,7 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
   const consoleService = new ConsoleService(ctx)
   const login = new LoginService(ctx)
   const apiKeys = new ApiKeyService(ctx)
+  const adminAuth = new AdminAuthService(ctx)
 
   // Extension management (docs/EXTENSION_LIFECYCLE.md §5): only wired when the
   // operator configured the Extension Manager endpoint. The manager token
@@ -92,12 +123,59 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
     }
     await next()
   })
-  app.use('/api/*', async (c, next) => {
+  // Public auth endpoints: no admin credential required. They are registered
+  // BEFORE the /api guard and matched by exact method+path, so the guard below
+  // never sees them (Hono runs middleware in registration order).
+  app.get('/api/auth/status', (c) => {
     const token = bearerToken(c.req.header('Authorization'))
-    if (!token || !tokenEquals(token, ctx.config.gatewayAdminToken)) {
-      return c.json({ error: 'unauthorized' }, 401)
+    const user = token ? adminAuth.authenticate(token) : undefined
+    return c.json(adminAuth.status(user))
+  })
+  app.post('/api/auth/register', async (c) => {
+    const body = await readJsonObject(c)
+    return c.json(await adminAuth.register(body), 201)
+  })
+  app.post('/api/auth/login', async (c) => {
+    const body = await readJsonObject(c)
+    return c.json(await adminAuth.login(body))
+  })
+
+  app.use('/api/*', async (c, next) => {
+    // Two independent credentials are accepted here, in this order:
+    //   1. the static GATEWAY_ADMIN_TOKEN from the environment (unchanged
+    //      operator/automation path; all existing tooling keeps working)
+    //   2. a live admin session token issued by /api/auth/login (or /register)
+    // A gateway API key (`gw-…`) and extension hop tokens are never valid here.
+    const token = bearerToken(c.req.header('Authorization'))
+    if (!token) return c.json({ error: 'unauthorized' }, 401)
+    if (tokenEquals(token, ctx.config.gatewayAdminToken)) {
+      await next()
+      return
     }
+    const sessionUser = adminAuth.authenticate(token)
+    if (!sessionUser) return c.json({ error: 'unauthorized' }, 401)
+    c.set('adminUser', sessionUser)
     await next()
+  })
+
+  // Session lifecycle (admin credential required; placed after the guard).
+  app.get('/api/auth/me', (c) => {
+    const user = c.get('adminUser') as AuthUserView | undefined
+    return c.json({
+      user: user ?? null,
+      // true when the caller used the static env token rather than a session
+      staticToken: user === undefined,
+      expiresAt: sessionExpiryOf(c, adminAuth),
+    })
+  })
+  app.post('/api/auth/logout', (c) => {
+    const token = bearerToken(c.req.header('Authorization'))
+    // Revoking a static env token is meaningless (and impossible): report the
+    // no-op honestly instead of pretending a session was destroyed.
+    if (token && !tokenEquals(token, ctx.config.gatewayAdminToken)) {
+      adminAuth.logout(token)
+    }
+    return c.json({ ok: true })
   })
 
   // -- OpenAI-compatible /v1 ------------------------------------------------
@@ -324,6 +402,10 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
 
   // -- error handling -------------------------------------------------------
   app.onError((err, c) => {
+    if (err instanceof AuthError) {
+      // Auth failures carry a machine-readable code but never internal detail.
+      return c.json({ error: err.code, message: err.message }, err.status)
+    }
     if (err instanceof AmbiguousModelError) {
       // bare model id matched several providers: tell the client how to disambiguate
       return c.json(
@@ -441,5 +523,5 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
     })
   }
 
-  return { app, chat, models, admin, login, apiKeys, listen }
+  return { app, chat, models, admin, login, apiKeys, adminAuth, listen }
 }

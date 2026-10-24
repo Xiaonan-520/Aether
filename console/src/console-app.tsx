@@ -1,21 +1,11 @@
 /**
- * Console shell: top bar, admin-token gate, routing. Data itself lives in
- * pages — this file only decides whether the console can talk to the core.
+ * Console shell: top bar, auth gate, routing. Data itself lives in pages —
+ * this file only decides whether the console can talk to the core.
  */
-import * as React from 'react'
 import { MotionConfig } from 'motion/react'
-import { getStoredToken, storeToken, ApiError } from '@/lib/api'
 import { useRoute } from '@/lib/router'
+import { AuthGate, useAuth } from '@/components/auth-gate'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
-import { Spinner } from '@/components/ui/spinner'
 import { MoonIcon, SunIcon } from 'lucide-react'
 import { HomePage } from './pages/home-page'
 import { ProviderPage } from './pages/provider-page'
@@ -29,8 +19,24 @@ export function ConsoleApp({
   theme: 'dark' | 'light'
   onToggleTheme: () => void
 }) {
-  const [token, setToken] = React.useState(getStoredToken)
+  return (
+    <MotionConfig reducedMotion="user">
+      <AuthGate>
+        <ConsoleShell theme={theme} onToggleTheme={onToggleTheme} />
+      </AuthGate>
+    </MotionConfig>
+  )
+}
+
+function ConsoleShell({
+  theme,
+  onToggleTheme,
+}: {
+  theme: 'dark' | 'light'
+  onToggleTheme: () => void
+}) {
   const [route, navigate] = useRoute()
+  const auth = useAuth()
 
   return (
     <MotionConfig reducedMotion="user">
@@ -73,7 +79,13 @@ export function ConsoleApp({
               </a>
             </nav>
             <div className="ml-auto flex items-center gap-2">
-              {token ? <span className="hidden text-xs text-muted-foreground md:inline">admin session active</span> : null}
+              {auth?.user ? (
+                <span className="hidden text-xs text-muted-foreground md:inline" title={auth.user.email}>
+                  {auth.user.email}
+                </span>
+              ) : auth?.staticToken ? (
+                <span className="hidden text-xs text-muted-foreground md:inline">static admin token</span>
+              ) : null}
               <Button
                 variant="ghost"
                 size="icon"
@@ -82,100 +94,34 @@ export function ConsoleApp({
               >
                 {theme === 'dark' ? <MoonIcon /> : <SunIcon />}
               </Button>
-              {token ? (
-                <Button variant="outline" size="sm" onClick={() => { storeToken(''); setToken('') }}>
-                  Sign out
-                </Button>
-              ) : null}
+              <Button variant="outline" size="sm" onClick={() => void auth?.signOut()}>
+                Sign out
+              </Button>
             </div>
           </div>
         </header>
 
         <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 sm:py-8">
-          {token ? (
-            route.name === 'home' ? (
-              <HomePage />
-            ) : route.name === 'provider' ? (
-              <ProviderPage id={route.id} onBack={() => navigate('/')} />
-            ) : route.name === 'extensions' ? (
-              <ExtensionsPage onOpen={(id) => navigate(`#/extensions/${encodeURIComponent(id)}`)} />
-            ) : route.name === 'extension' ? (
-              <ExtensionDetailPage id={route.id} onBack={() => navigate('#/extensions')} />
-            ) : route.name === 'keys' ? (
-              <KeysPage />
-            ) : null
-          ) : (
-            <TokenGate onDone={(t) => { storeToken(t); setToken(t) }} />
-          )}
+          {route.name === 'home' ? (
+            <HomePage />
+          ) : route.name === 'provider' ? (
+            <ProviderPage id={route.id} onBack={() => navigate('/')} />
+          ) : route.name === 'extensions' ? (
+            <ExtensionsPage onOpen={(id) => navigate(`#/extensions/${encodeURIComponent(id)}`)} />
+          ) : route.name === 'extension' ? (
+            <ExtensionDetailPage id={route.id} onBack={() => navigate('#/extensions')} />
+          ) : route.name === 'keys' ? (
+            <KeysPage />
+          ) : null}
         </main>
 
         <footer className="border-t border-border/70 py-4">
           <div className="mx-auto w-full max-w-7xl px-4 text-xs text-muted-foreground sm:px-6">
-            Gateway Core management console · data via <code className="font-mono">/api/*</code> · admin token stays in this browser (sessionStorage)
+            Aether Core management console · data via <code className="font-mono">/api/*</code> · session
+            credential stays in this browser tab (sessionStorage)
           </div>
         </footer>
       </div>
     </MotionConfig>
-  )
-}
-
-function TokenGate({ onDone }: { onDone: (token: string) => void }) {
-  const [value, setValue] = React.useState('')
-  const [checking, setChecking] = React.useState(false)
-  const [error, setError] = React.useState<string | null>(null)
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!value.trim() || checking) return
-    setChecking(true)
-    setError(null)
-    // verify the token against a cheap admin endpoint before storing it
-    try {
-      await fetch('/api/console/overview', {
-        headers: { Authorization: `Bearer ${value.trim()}` },
-      }).then(async (res) => {
-        if (res.status === 401) throw new ApiError(401, 'Token rejected by the gateway (401)')
-        if (!res.ok) throw new ApiError(res.status, `Gateway returned ${res.status}`)
-        return res.json()
-      })
-      onDone(value.trim())
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Verification failed')
-    } finally {
-      setChecking(false)
-    }
-  }
-
-  return (
-    <div className="mx-auto flex max-w-md flex-col gap-6 pt-10 sm:pt-20">
-      <Card>
-        <CardHeader>
-          <CardTitle>Admin sign-in</CardTitle>
-          <CardDescription>
-            Paste the gateway admin token (<code className="font-mono">GATEWAY_ADMIN_TOKEN</code>).
-            It is verified against the core and kept in this browser tab only — never sent anywhere else.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form className="flex flex-col gap-3" onSubmit={submit}>
-            <Input
-              type="password"
-              placeholder="Gateway admin token"
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              aria-invalid={error ? true : undefined}
-              autoFocus
-            />
-            {error ? (
-              <p className="text-sm text-destructive" role="alert">{error}</p>
-            ) : null}
-            <Button type="submit" disabled={checking || !value.trim()}>
-              {checking ? <Spinner data-icon="inline-start" /> : null}
-              Unlock console
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
-    </div>
   )
 }

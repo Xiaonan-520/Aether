@@ -63,7 +63,7 @@ describe('api — request error mapping', () => {
     vi.unstubAllGlobals()
   })
 
-  it('maps 401 to an explicit unauthorized hint', async () => {
+  it('maps 401 to a session-expired hint', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(() => Promise.resolve(new Response('unauthorized', { status: 401 }))),
@@ -71,7 +71,7 @@ describe('api — request error mapping', () => {
     const { api } = await import('./api')
     await expect(api.overview()).rejects.toMatchObject({
       status: 401,
-      message: 'Unauthorized — check the admin token',
+      message: 'Session expired — please sign in again',
     } satisfies Partial<ApiError>)
     vi.unstubAllGlobals()
   })

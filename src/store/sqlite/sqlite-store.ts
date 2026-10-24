@@ -21,6 +21,8 @@ import type {
   StoreGateway,
   StoreResult,
   ApiKeyRecord,
+  AdminUserRecord,
+  AdminSessionRecord,
 } from '../types.js'
 import { MIGRATIONS } from './schema.js'
 import { dayKey } from '../memory-store.js'
@@ -194,6 +196,46 @@ function rowToApiKey(r: ApiKeyRow): ApiKeyRecord {
     createdAt: r.created_at,
     lastUsedAt: r.last_used_at,
     expiresAt: r.expires_at,
+    revokedAt: r.revoked_at,
+  }
+}
+
+interface AdminUserRow {
+  id: string
+  email: string
+  password_hash: string
+  created_at: number
+  updated_at: number
+}
+
+function rowToAdminUser(r: AdminUserRow): AdminUserRecord {
+  return {
+    id: r.id,
+    email: r.email,
+    passwordHash: r.password_hash,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  }
+}
+
+interface AdminSessionRow {
+  id: string
+  user_id: string
+  token_hash: string
+  created_at: number
+  expires_at: number
+  last_used_at: number | null
+  revoked_at: number | null
+}
+
+function rowToAdminSession(r: AdminSessionRow): AdminSessionRecord {
+  return {
+    id: r.id,
+    userId: r.user_id,
+    tokenHash: r.token_hash,
+    createdAt: r.created_at,
+    expiresAt: r.expires_at,
+    lastUsedAt: r.last_used_at,
     revokedAt: r.revoked_at,
   }
 }
@@ -725,6 +767,128 @@ export class SqliteStore implements StoreGateway {
       .prepare('UPDATE api_keys SET enabled = 0, revoked_at = ? WHERE id = ?')
       .run(at, id)
     return info.changes > 0 ? { ok: true } : { ok: false, error: `api key "${id}" not found` }
+  }
+
+  // -- admin identity ---------------------------------------------------------
+  createAdminUser(user: AdminUserRecord): StoreResult {
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO admin_users (id, email, password_hash, created_at, updated_at)
+           VALUES (@id, @email, @passwordHash, @createdAt, @updatedAt)`,
+        )
+        .run({
+          id: user.id,
+          email: user.email,
+          passwordHash: user.passwordHash,
+          createdAt: user.createdAt,
+          updatedAt: user.updatedAt,
+        })
+      return { ok: true }
+    } catch (err) {
+      // UNIQUE(id) or UNIQUE(email) — the email index is what makes concurrent
+      // first-registration safe: exactly one INSERT can win.
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  }
+
+  /**
+   * Atomic first-admin insert: a single IMMEDIATE transaction holds the write
+   * lock across the emptiness check and the insert, so concurrent registrations
+   * cannot both observe an empty table. The UNIQUE(email) index is a second
+   * line of defence for the same-email case.
+   */
+  createFirstAdminUser(user: AdminUserRecord): StoreResult {
+    const insert = this.db.transaction((): StoreResult => {
+      const count = (this.db.prepare('SELECT COUNT(*) AS n FROM admin_users').get() as { n: number }).n
+      if (count > 0) return { ok: false, error: 'not_first' }
+      try {
+        this.db
+          .prepare(
+            `INSERT INTO admin_users (id, email, password_hash, created_at, updated_at)
+             VALUES (@id, @email, @passwordHash, @createdAt, @updatedAt)`,
+          )
+          .run({
+            id: user.id,
+            email: user.email,
+            passwordHash: user.passwordHash,
+            createdAt: user.createdAt,
+            updatedAt: user.updatedAt,
+          })
+        return { ok: true }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    })
+    return insert.immediate()
+  }
+
+  getAdminUserByEmail(email: string): AdminUserRecord | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM admin_users WHERE email = ? LIMIT 1')
+      .get(email) as AdminUserRow | undefined
+    return row ? rowToAdminUser(row) : undefined
+  }
+
+  getAdminUserById(id: string): AdminUserRecord | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM admin_users WHERE id = ? LIMIT 1')
+      .get(id) as AdminUserRow | undefined
+    return row ? rowToAdminUser(row) : undefined
+  }
+
+  countAdminUsers(): number {
+    return (this.db
+      .prepare('SELECT COUNT(*) AS n FROM admin_users')
+      .get() as { n: number }).n
+  }
+
+  // -- admin sessions ---------------------------------------------------------
+  createAdminSession(session: AdminSessionRecord): StoreResult {
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO admin_sessions (id, user_id, token_hash, created_at, expires_at, last_used_at, revoked_at)
+           VALUES (@id, @userId, @tokenHash, @createdAt, @expiresAt, @lastUsedAt, @revokedAt)`,
+        )
+        .run({
+          id: session.id,
+          userId: session.userId,
+          tokenHash: session.tokenHash,
+          createdAt: session.createdAt,
+          expiresAt: session.expiresAt,
+          lastUsedAt: session.lastUsedAt,
+          revokedAt: session.revokedAt,
+        })
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  }
+
+  getAdminSessionByTokenHash(tokenHash: string): AdminSessionRecord | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM admin_sessions WHERE token_hash = ? LIMIT 1')
+      .get(tokenHash) as AdminSessionRow | undefined
+    return row ? rowToAdminSession(row) : undefined
+  }
+
+  touchAdminSession(id: string, at: number): void {
+    this.db.prepare('UPDATE admin_sessions SET last_used_at = ? WHERE id = ?').run(at, id)
+  }
+
+  revokeAdminSession(id: string, at: number): boolean {
+    const info = this.db
+      .prepare('UPDATE admin_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL')
+      .run(at, id)
+    return info.changes > 0
+  }
+
+  pruneAdminSessions(beforeMs: number): number {
+    const info = this.db
+      .prepare('DELETE FROM admin_sessions WHERE expires_at < ?')
+      .run(beforeMs)
+    return info.changes
   }
 
   close(): void {

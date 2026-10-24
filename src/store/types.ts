@@ -51,6 +51,34 @@ export interface ApiKeyRecord {
 /** Fields accepted when creating an API key. */
 export type ApiKeyInput = Omit<ApiKeyRecord, 'lastUsedAt' | 'revokedAt'>
 
+/**
+ * A human administrator. `passwordHash` is the self-describing scrypt digest
+ * from `core/auth/password.ts`; the password itself is never stored.
+ */
+export interface AdminUserRecord {
+  id: string
+  /** Normalized (trimmed, lowercased) address; unique. */
+  email: string
+  /** Encoded scrypt digest: scrypt$N$r$p$salt$hash. */
+  passwordHash: string
+  createdAt: number
+  updatedAt: number
+}
+
+/**
+ * A login session. `tokenHash` is SHA-256 of the bearer token the browser
+ * holds — the token itself is never persisted.
+ */
+export interface AdminSessionRecord {
+  id: string
+  userId: string
+  tokenHash: string
+  createdAt: number
+  expiresAt: number
+  lastUsedAt: number | null
+  revokedAt: number | null
+}
+
 export interface Job {
   id: string
   provider: string | null
@@ -120,4 +148,35 @@ export interface StoreGateway {
   touchApiKey(id: string, at: number): void
   /** Soft-delete: stamps revoked_at and disables the key. */
   revokeApiKey(id: string, at: number): StoreResult
+
+  /**
+   * Admin identity (email + scrypt digest). Separate trust domain from
+   * api_keys: these are humans, those are machine clients.
+   */
+  createAdminUser(user: AdminUserRecord): StoreResult
+  /**
+   * Insert only when no admin exists yet, as ONE atomic operation.
+   *
+   * This is what makes concurrent first-registration safe: `count()` followed
+   * by `create()` is a check-then-act race that lets several simultaneous
+   * requests past the check while scrypt hashing runs. Returns
+   * `{ ok: false, error: 'not_first' }` when an admin already exists.
+   */
+  createFirstAdminUser(user: AdminUserRecord): StoreResult
+  getAdminUserByEmail(email: string): AdminUserRecord | undefined
+  getAdminUserById(id: string): AdminUserRecord | undefined
+  /** Number of admin accounts; used to close public registration permanently. */
+  countAdminUsers(): number
+
+  /**
+   * Login sessions. Only the SHA-256 of the token is stored, so a database
+   * read cannot be replayed as a live session.
+   */
+  createAdminSession(session: AdminSessionRecord): StoreResult
+  getAdminSessionByTokenHash(tokenHash: string): AdminSessionRecord | undefined
+  touchAdminSession(id: string, at: number): void
+  /** Stamp revoked_at (idempotent); returns false when the row is unknown. */
+  revokeAdminSession(id: string, at: number): boolean
+  /** Delete sessions that expired before `beforeMs`; returns rows removed. */
+  pruneAdminSessions(beforeMs: number): number
 }
