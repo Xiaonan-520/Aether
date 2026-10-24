@@ -9,20 +9,18 @@
 # reproducible deploys (see the package's tags on GHCR).
 #
 # IMAGE MIGRATION (repository renamed to Aether):
-#   The default still points at the pre-rename package because it is the one
-#   that actually exists today: every image built and published so far lives
-#   under ghcr.io/xiaonan-520/multi-provider-ai-gateway. Existing deployments
-#   are therefore untouched — a running stack is not re-pulled unless you
-#   explicitly run `docker compose pull`.
+#   The default points at the post-rename package. The pre-rename package is
+#   NOT deleted — every image published before the rename stays pullable under
+#   ghcr.io/xiaonan-520/multi-provider-ai-gateway. A running stack is not
+#   re-pulled unless you explicitly run `docker compose pull`, so existing
+#   deployments are unaffected until they choose to update.
 #
-#   CI derives the image path from ${GITHUB_REPOSITORY,,}, so the first run
-#   created AFTER the rename publishes to ghcr.io/xiaonan-520/aether. Once
-#   that package exists and is verified, switch the default here (one line) or
-#   opt in per deployment without editing this file:
-#     GATEWAY_IMAGE_REPO=ghcr.io/xiaonan-520/aether
+#   To keep a deployment on the pre-rename package, set this in .env without
+#   editing this file:
+#     GATEWAY_IMAGE_REPO=ghcr.io/xiaonan-520/multi-provider-ai-gateway
 services:
   gateway:
-    image: ${GATEWAY_IMAGE_REPO:-ghcr.io/xiaonan-520/multi-provider-ai-gateway}:${GATEWAY_IMAGE_TAG:-latest}
+    image: ${GATEWAY_IMAGE_REPO:-ghcr.io/xiaonan-520/aether}:${GATEWAY_IMAGE_TAG:-latest}
     container_name: ai-gateway
     ports:
       - "8080:8080"

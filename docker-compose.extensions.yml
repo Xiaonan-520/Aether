@@ -29,10 +29,9 @@ services:
 
   gateway-extension-manager:
     # Built from the gateway repo (same image as gateway, different entrypoint).
-    # Same migration rule as docker-compose.yml: default to the package that
-    # exists today; opt in to ghcr.io/xiaonan-520/aether via GATEWAY_IMAGE_REPO
-    # once CI has published it.
-    image: ${GATEWAY_IMAGE_REPO:-ghcr.io/xiaonan-520/multi-provider-ai-gateway}:${GATEWAY_IMAGE_TAG:-latest}
+    # Same migration rule as docker-compose.yml: the post-rename package is the
+    # default; set GATEWAY_IMAGE_REPO to stay on the pre-rename one.
+    image: ${GATEWAY_IMAGE_REPO:-ghcr.io/xiaonan-520/aether}:${GATEWAY_IMAGE_TAG:-latest}
     container_name: ai-gateway-extension-manager
     entrypoint: ["node", "dist/manager/main.js"]
     environment:

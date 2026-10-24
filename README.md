@@ -211,11 +211,11 @@ Issue 和 PR 都欢迎。写 Provider 适配器请保持 Core 的 Provider 无�
 镜像由 GitHub Actions 构建，推送到 GHCR（`main` 分支每次 push 及所有 `v*` tag）：
 
 ```bash
-# 当前实际发布地址（仓库改名为 Aether 后仍需确认新包已发布）
-docker pull ghcr.io/xiaonan-520/multi-provider-ai-gateway:latest
+# 规范地址（仓库改名为 Aether 后的 CI 发布目标）
+docker pull ghcr.io/xiaonan-520/aether:latest
 
-# 改名后的规范地址；CI 在改名后首次运行起会发布到这里
-# docker pull ghcr.io/xiaonan-520/aether:latest
+# 改名前的镜像仍保留在 GHCR，已有 tag 不受影响
+docker pull ghcr.io/xiaonan-520/multi-provider-ai-gateway:latest
 ```
 
 `docker-compose.yml` 把 `gateway-data` 卷挂到 `/data`，容器内健康检查打 `/healthz`，`restart: unless-stopped`。密钥来自 compose 文件旁边的 `.env`——永远不要烤进镜像。要可复现部署就把 `GATEWAY_IMAGE_TAG` 钉到 `sha-<commit>` tag。

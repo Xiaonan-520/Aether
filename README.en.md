@@ -273,13 +273,11 @@ The image is built by GitHub Actions and published to GHCR on every push to
 `main` and every `v*` tag:
 
 ```bash
-# Currently published location (confirm the new package exists after the
-# repository rename before switching)
-docker pull ghcr.io/xiaonan-520/multi-provider-ai-gateway:latest
+# Canonical location (CI's publish target after the repository became Aether)
+docker pull ghcr.io/xiaonan-520/aether:latest
 
-# Canonical post-rename location; CI publishes here from the first run
-# created after the rename.
-# docker pull ghcr.io/xiaonan-520/aether:latest
+# Images published before the rename remain available; existing tags are kept
+docker pull ghcr.io/xiaonan-520/multi-provider-ai-gateway:latest
 ```
 
 `docker-compose.yml` runs the image with the data volume `gateway-data`
