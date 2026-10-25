@@ -147,7 +147,10 @@ export function minimaxManifestFor(product: MinimaxProduct, extensionId = produc
     apiVersion: '1.0',
     extension: {
       id: extensionId,
-      version: '1.0.0',
+      // MUST equal the image tag: Core rejects an install whose manifest
+      // version differs from the requested tag (assertTrustedSource). Bump
+      // this together with the image tag.
+      version: '1.0.14',
       displayName: product.displayName,
       description: `MiniMax Code (${product.region === 'cn' ? 'China' : 'International'}) via the Anthropic Messages protocol`,
       author: 'XiNan',

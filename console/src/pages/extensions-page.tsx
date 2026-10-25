@@ -48,6 +48,7 @@ export function ExtensionsPage({ onOpen }: { onOpen: (id: string) => void }) {
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [notice, setNotice] = React.useState<string | null>(null)
+  const [installOpen, setInstallOpen] = React.useState(false)
 
   const runLifecycle = async () => {
     if (!confirm) return
@@ -92,9 +93,14 @@ export function ExtensionsPage({ onOpen }: { onOpen: (id: string) => void }) {
             Installable provider packs. Install / runtime / health are tracked separately.
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => list.refetch()}>
-          <RefreshCwIcon data-icon="inline-start" /> Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => list.refetch()}>
+            <RefreshCwIcon data-icon="inline-start" /> Refresh
+          </Button>
+          <Button size="sm" onClick={() => setInstallOpen(true)}>
+            <PlusIcon data-icon="inline-start" /> Install
+          </Button>
+        </div>
       </header>
 
       {error ? <Notice tone="error" title="Operation failed" body={error} /> : null}
@@ -140,7 +146,131 @@ export function ExtensionsPage({ onOpen }: { onOpen: (id: string) => void }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <InstallDialog
+        open={installOpen}
+        onClose={() => setInstallOpen(false)}
+        onInstalled={(id) => {
+          setInstallOpen(false)
+          setNotice(`Extension "${id}" installed and registered.`)
+          list.refetch()
+        }}
+      />
     </div>
+  )
+}
+
+/**
+ * Install an extension by naming its image.
+ *
+ * The core probes the image for the manifest it serves and runs the normal
+ * install path, so the operator does not extract or paste JSON by hand
+ * (KI-001). All validation still happens server-side: trusted repo prefix,
+ * tag === manifest version, health check, conformance.
+ */
+function InstallDialog({
+  open,
+  onClose,
+  onInstalled,
+}: {
+  open: boolean
+  onClose: () => void
+  onInstalled: (id: string) => void
+}) {
+  const [repo, setRepo] = React.useState('local/gateway-extension-')
+  const [tag, setTag] = React.useState('')
+  const [busy, setBusy] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+
+  const reset = () => {
+    setRepo('local/gateway-extension-')
+    setTag('')
+    setError(null)
+    setBusy(false)
+  }
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!repo.trim() || !tag.trim() || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await extensionsApi.installFromImage({ repo: repo.trim(), tag: tag.trim() })
+      onInstalled(result.extensionId)
+      reset()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Install failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) {
+          reset()
+          onClose()
+        }
+      }}
+    >
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Install an extension</DialogTitle>
+          <DialogDescription>
+            Name the image. The gateway reads the manifest from the image, checks that its
+            version matches the tag, starts the container, waits for it to become healthy and
+            registers its providers.
+          </DialogDescription>
+        </DialogHeader>
+        <form className="flex flex-col gap-3" onSubmit={submit}>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="ext-repo">Image repository</Label>
+            <Input
+              id="ext-repo"
+              placeholder="local/gateway-extension-minimax"
+              value={repo}
+              onChange={(e) => setRepo(e.target.value)}
+              autoFocus
+              disabled={busy}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="ext-tag">Tag (must be an exact version)</Label>
+            <Input
+              id="ext-tag"
+              placeholder="1.0.14"
+              value={tag}
+              onChange={(e) => setTag(e.target.value)}
+              disabled={busy}
+            />
+            <p className="text-xs text-muted-foreground">
+              <code className="font-mono">latest</code> is refused — a tag pins what you install.
+            </p>
+          </div>
+          {error ? (
+            <p className="text-sm text-destructive" role="alert">
+              {error}
+            </p>
+          ) : null}
+          {busy ? (
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Spinner /> Pulling, starting and health-checking. This can take a minute.
+            </p>
+          ) : null}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => { reset(); onClose() }} disabled={busy}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={busy || !repo.trim() || !tag.trim()}>
+              {busy ? <Spinner data-icon="inline-start" /> : null}
+              Install
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }
 

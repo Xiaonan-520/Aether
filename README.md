@@ -81,16 +81,70 @@ npm install
 npm run build && npm start    # 开发模式：npm run dev
 ```
 
-然后通过管理 API 注册账号（所有管理端点都要求 `Authorization: Bearer <GATEWAY_ADMIN_TOKEN>`）：
+### 首次初始化管理员
+
+网关第一次启动时还没有任何管理员。打开控制台完成一次性注册：
 
 ```bash
-# 发起某 Provider 的登录流程
-curl -X POST -H "Authorization: Bearer $ADMIN" \
+open http://127.0.0.1:8080/console
+```
+
+页面会显示「Create the administrator account」：填邮箱、设一个至少 10 位（建议更长）的密码即可。
+**没有邮箱验证，也不需要 SMTP** —— 邮箱只是账号标识，不代表已验证所有权。
+
+注册成功后这个公开入口**永久关闭**：其他人无法再创建第二个管理员，已存在的管理员也不能重复注册。
+并发提交是安全的（数据库层面原子插入，只有一个请求会成功）。
+
+如果错过了浏览器流程，也可以用 API 完成：
+
+```bash
+curl -X POST -H 'Content-Type: application/json' \
+     -d '{"email":"you@example.com","password":"a-long-password"}' \
+     http://127.0.0.1:8080/api/auth/register
+```
+
+### 登录与 Admin Token
+
+登录后，所有管理操作都用会话凭据完成，不需要手工配置密钥：
+
+```bash
+# 登录，拿到会话 token
+curl -sX POST -H 'Content-Type: application/json' \
+     -d '{"email":"you@example.com","password":"a-long-password"}' \
+     http://127.0.0.1:8080/api/auth/login
+
+# 用会话 token 访问管理 API
+curl -H "Authorization: Bearer $SESSION" http://127.0.0.1:8080/api/accounts
+```
+
+在控制台的 **API Keys** 页面创建 **Admin Token** 给外部客户端用（RikkaHub 等）：
+
+- 完整 Token **只在创建时显示一次**，之后只保留前缀；数据库里只存 SHA-256 哈希。
+- 可以设置有效期，可以随时撤销；撤销后立即失效。
+- Admin Token 只能用于 `/v1/*`，**不能**访问 `/api/*`。
+
+### 三种凭据的区别
+
+| 凭据 | 用途 | 存放位置 | 能否访问 `/api` | 能否访问 `/v1` |
+| --- | --- | --- | --- | --- |
+| 管理员邮箱 + 密码 | 登录换取会话 | 服务端 scrypt 摘要 | — | — |
+| Web 登录会话 | 已登录的浏览器 | 库内 SHA-256，`adm-` 前缀 | ✅ | ❌ |
+| Admin Token | 外部客户端调用 | 库内 SHA-256，`gw-` 前缀 | ❌ | ✅ |
+| `GATEWAY_ADMIN_TOKEN` | 内部/自动化运维 | 仅环境变量，不进浏览器 | ✅ | ❌ |
+| Extension Hop Token | Core ↔ Manager ↔ Extension | 各自密封存储 | ❌ | ❌ |
+
+`GATEWAY_ADMIN_TOKEN` 是保留的服务端后门，用于自动化和故障恢复，**永远不要发给浏览器或客户端**。
+
+### 注册 Provider 账号
+
+```bash
+# 发起某 Provider 的登录流程（用会话 token 或 GATEWAY_ADMIN_TOKEN 都行）
+curl -X POST -H "Authorization: Bearer $SESSION" \
      -H "Content-Type: application/json" \
      -d '{"displayName": "main"}' \
      http://127.0.0.1:8080/api/accounts/workbuddy/login
-# 轮询返回的 loginId 直到成功，然后聊天：
-curl -X POST -H "Authorization: Bearer $KEY" \
+# 轮询返回的 loginId 直到成功，然后用 Admin Token 聊天：
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
      -H "Content-Type: application/json" \
      -d '{"model": "workbuddy::glm-5.3", "messages": [{"role": "user", "content": "hi"}]}' \
      http://127.0.0.1:8080/v1/chat/completions
@@ -122,7 +176,21 @@ GET  /v1/models               模型目录，带可用性标注
 POST /v1/chat/completions     聊天；stream=true 时返回 SSE（data: {...} … data: [DONE]）
 ```
 
-### 管理 — `Authorization: Bearer <GATEWAY_ADMIN_TOKEN>`
+### 认证 — 无需凭据
+
+```text
+GET  /api/auth/status    是否已完成初始化（公开，不泄露管理员邮箱）
+POST /api/auth/register  首次管理员注册（只在没有管理员时可用，之后永久 409）
+POST /api/auth/login     邮箱 + 密码登录，返回会话 token
+```
+
+### 管理 — `Authorization: Bearer <会话 token 或 GATEWAY_ADMIN_TOKEN>`
+
+```text
+GET  /api/auth/me                                  当前身份与会话过期时间
+POST /api/auth/logout                              撤销当前会话
+POST /api/auth/password                            修改密码（需当前密码；撤销其他会话）
+```
 
 ```text
 GET    /api/providers                              已注册的 Provider
@@ -137,9 +205,32 @@ POST   /api/accounts/:id/import-credential         导入现成凭据
 POST   /api/accounts/:provider/captcha             仅 zcode：提交人工完成的 CAPTCHA token
 GET    /api/jobs?type=                             后台任务历史
 GET    /api/events?limit=                          审计事件
-POST   /api/keys                                   签发网关 API key
-GET    /api/keys
-DELETE /api/keys/:id
+POST   /api/keys                                   创建 Admin Token（完整值只返回这一次）
+GET    /api/keys                                   列出（只有前缀，无明文、无哈希）
+DELETE /api/keys/:id                               撤销
+```
+
+### Extension 生命周期 — 需要管理凭据
+
+```text
+GET  /api/console/extensions                        已安装扩展及三态
+GET  /api/console/extensions/available              可注册的扩展
+POST /api/console/extensions/install-from-image     按镜像名安装（推荐）
+      body: {"image": {"repo": "local/gateway-extension-minimax", "tag": "1.0.14"}}
+POST /api/console/extensions/install                按 manifest 安装（高级，需自行提供 manifest）
+POST /api/console/extensions/:id/upgrade            升级
+POST /api/console/extensions/:id/{stop,restart,remove}
+POST /api/console/extensions/:id/reload             重新挂载 Provider（升级后 token 轮换时用）
+GET  /api/console/extensions/:id                    详情
+```
+
+`install-from-image` 会先在临时容器里读取镜像自带的 `/manifest`，校验版本与 tag 一致后再走正常安装流程。
+这样安装一个扩展只需要知道镜像名和版本，不必手工提取 manifest。
+
+```bash
+curl -X POST -H "Authorization: Bearer $SESSION" -H 'Content-Type: application/json' \
+     -d '{"image":{"repo":"local/gateway-extension-minimax","tag":"1.0.14"}}' \
+     http://127.0.0.1:8080/api/console/extensions/install-from-image
 ```
 
 ```text

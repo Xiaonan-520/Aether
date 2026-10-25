@@ -34,6 +34,7 @@ export type AuthErrorCode =
   | 'too_many_attempts'
   | 'not_initialized'
   | 'unauthorized'
+  | 'invalid_request'
 
 export class AuthError extends Error {
   constructor(
@@ -208,6 +209,45 @@ export class AdminAuthService {
     const record = this.ctx.store.getAdminSessionByTokenHash(hashSessionToken(token))
     if (!record || record.revokedAt !== null) return null
     return record.expiresAt > this.ctx.now() ? record.expiresAt : null
+  }
+
+  /**
+   * Change the admin password.
+   *
+   * Requires the current password even though the caller already holds a live
+   * session: a stolen session must not be enough to lock the real owner out.
+   * Every session of this admin is revoked afterwards, and a fresh one is
+   * returned so the caller stays signed in on this device only.
+   */
+  async changePassword(
+    user: AdminUserView,
+    input: { currentPassword?: unknown; newPassword?: unknown },
+  ): Promise<AuthSessionResult> {
+    const currentPassword = typeof input.currentPassword === 'string' ? input.currentPassword : ''
+    const newPassword = this.requirePassword(input.newPassword)
+
+    const record = this.ctx.store.getAdminUserById(user.id)
+    if (!record) throw new AuthError(401, 'unauthorized', 'account no longer exists')
+
+    const ok = await verifyPassword(currentPassword, record.passwordHash)
+    if (!ok) {
+      // Same throttle bucket as login: repeated guesses hit the same limit.
+      this.recordFailure(record.email)
+      throw new AuthError(401, 'invalid_credentials', 'current password is incorrect')
+    }
+    if (newPassword === currentPassword) {
+      throw new AuthError(400, 'weak_password', 'the new password must differ from the current one')
+    }
+
+    const passwordHash = await hashPassword(newPassword)
+    const now = this.ctx.now()
+    const updated = this.ctx.store.updateAdminPassword(record.id, passwordHash, now)
+    if (!updated.ok) throw new AuthError(401, 'unauthorized', 'could not update the password')
+
+    // Any credential minted under the old password is now untrusted.
+    const revoked = this.ctx.store.revokeAdminSessionsForUser(record.id, now)
+    this.audit('admin.password_changed', { userId: record.id, sessionsRevoked: revoked })
+    return this.issueSession(record, now)
   }
 
   /** Revoke the session behind `token`. Idempotent: unknown tokens are a no-op. */

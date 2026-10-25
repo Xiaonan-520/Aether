@@ -177,6 +177,16 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
     }
     return c.json({ ok: true })
   })
+  app.post('/api/auth/password', async (c) => {
+    const user = c.get('adminUser') as AuthUserView | undefined
+    if (!user) {
+      // The static env token has no account behind it, so there is nothing to
+      // change. Say so instead of pretending the password was updated.
+      throw new AuthError(400, 'invalid_request', 'the static admin token has no password; sign in with an admin account')
+    }
+    const body = await readJsonObject(c)
+    return c.json(await adminAuth.changePassword(user, body))
+  })
 
   // -- OpenAI-compatible /v1 ------------------------------------------------
   app.get('/v1/models', (c) => {
@@ -391,11 +401,15 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
 
   // -- issued gateway API keys (admin token; inherits the /api/* middleware) --
   // The full key is returned by POST only; GET never exposes key or hash.
+  // The creator is recorded when the caller signed in with an admin account;
+  // a caller using the static GATEWAY_ADMIN_TOKEN has no account, so the key
+  // is stored with a null owner.
   app.post('/api/keys', async (c) => {
     const body = await c.req
       .json<Record<string, unknown>>()
       .catch(() => ({} as Record<string, unknown>))
-    return c.json(apiKeys.create({ name: body.name, expiresAt: body.expiresAt }), 201)
+    const creator = (c.get('adminUser') as AuthUserView | undefined)?.id ?? null
+    return c.json(apiKeys.create({ name: body.name, expiresAt: body.expiresAt }, creator), 201)
   })
   app.get('/api/keys', (c) => c.json({ keys: apiKeys.list() }))
   app.delete('/api/keys/:id', (c) => c.json(apiKeys.remove(c.req.param('id'))))
@@ -460,6 +474,10 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
       jsonOrError(c, await extensions!.available()))
     app.post('/api/console/extensions/install', async (c) =>
       jsonOrError(c, await extensions!.install(await readBody(c) as { manifest: unknown; image?: { repo: string; tag: string; digest?: string } })))
+    // Install by image name only: Core probes the image for its manifest, so
+    // the console never asks an operator to handle JSON by hand (KI-001).
+    app.post('/api/console/extensions/install-from-image', async (c) =>
+      jsonOrError(c, await extensions!.installFromImage(await readBody(c) as { image?: { repo?: string; tag?: string; digest?: string } })))
     app.post('/api/console/extensions/:id/upgrade', async (c) =>
       jsonOrError(c, await extensions!.upgrade(c.req.param('id'), await readBody(c) as { manifest: unknown; image?: { repo: string; tag: string; digest?: string } })))
     app.post('/api/console/extensions/:id/stop', async (c) =>

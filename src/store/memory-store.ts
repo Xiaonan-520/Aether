@@ -289,6 +289,23 @@ export class MemoryStore implements StoreGateway {
     return this.adminUsers.size
   }
 
+  updateAdminPassword(id: string, passwordHash: string, at: number): StoreResult {
+    const record = this.adminUsers.get(id)
+    if (!record) return { ok: false, error: `admin user "${id}" not found` }
+    this.adminUsers.set(id, { ...record, passwordHash, updatedAt: at })
+    return { ok: true }
+  }
+
+  revokeAdminSessionsForUser(userId: string, at: number): number {
+    let revoked = 0
+    for (const [id, record] of this.adminSessions) {
+      if (record.userId !== userId || record.revokedAt !== null) continue
+      this.adminSessions.set(id, { ...record, revokedAt: at })
+      revoked++
+    }
+    return revoked
+  }
+
   // -- admin sessions ---------------------------------------------------------
   createAdminSession(session: AdminSessionRecord): StoreResult {
     if (this.adminSessions.has(session.id)) {

@@ -113,6 +113,7 @@ export function KeysPage() {
                 <TableHead>Name</TableHead>
                 <TableHead>Prefix</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead className="hidden lg:table-cell">Created by</TableHead>
                 <TableHead className="hidden md:table-cell">Created</TableHead>
                 <TableHead className="hidden md:table-cell">Last used</TableHead>
                 <TableHead className="hidden lg:table-cell">Expires</TableHead>
@@ -180,6 +181,9 @@ function KeyRow({ record, onRevoke, busy, now }: { record: ApiKeyView; onRevoke:
         ) : (
           <Badge variant="outline" className="text-muted-foreground">disabled</Badge>
         )}
+      </TableCell>
+      <TableCell className="hidden lg:table-cell text-muted-foreground">
+        {record.createdBy ?? 'static token'}
       </TableCell>
       <TableCell className="hidden md:table-cell text-muted-foreground">{formatTime(record.createdAt)}</TableCell>
       <TableCell className="hidden md:table-cell text-muted-foreground">{formatTime(record.lastUsedAt)}</TableCell>

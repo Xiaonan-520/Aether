@@ -46,6 +46,12 @@ export interface ApiKeyRecord {
   lastUsedAt: number | null
   expiresAt: number | null
   revokedAt: number | null
+  /**
+   * Admin who created the key, or null for keys issued before ownership was
+   * tracked / with the static env token. Provenance only — never used for
+   * authorization decisions.
+   */
+  createdBy: string | null
 }
 
 /** Fields accepted when creating an API key. */
@@ -167,6 +173,10 @@ export interface StoreGateway {
   getAdminUserById(id: string): AdminUserRecord | undefined
   /** Number of admin accounts; used to close public registration permanently. */
   countAdminUsers(): number
+  /** Replace the password digest for an existing admin. */
+  updateAdminPassword(id: string, passwordHash: string, at: number): StoreResult
+  /** Revoke every live session of one admin (used after a password change). */
+  revokeAdminSessionsForUser(userId: string, at: number): number
 
   /**
    * Login sessions. Only the SHA-256 of the token is stored, so a database

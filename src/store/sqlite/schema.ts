@@ -173,4 +173,18 @@ export const MIGRATIONS: Migration[] = [
       `CREATE INDEX IF NOT EXISTS ix_admin_sessions_user ON admin_sessions(user_id)`,
     ],
   },
+  {
+    // Attribute issued API keys to the admin who created them.
+    //
+    // Nullable on purpose: keys created before this migration (and keys made
+    // with the static GATEWAY_ADMIN_TOKEN, which has no account) legitimately
+    // have no owner. Existing rows therefore keep working unchanged — no
+    // backfill, no rewrite, no data loss. The column only adds provenance for
+    // the console listing.
+    version: 4,
+    statements: [
+      `ALTER TABLE api_keys ADD COLUMN created_by TEXT`,
+      `CREATE INDEX IF NOT EXISTS ix_api_keys_created_by ON api_keys(created_by)`,
+    ],
+  },
 ]

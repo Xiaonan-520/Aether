@@ -49,6 +49,16 @@ services:
       - manager-data:/data
       # ── THE one and only docker socket mount in the entire stack ──
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    # The manager listens on HTTP_PORT (9100), NOT 8080 — that port belongs to
+    # the gateway. Probing the wrong port made Docker report a perfectly
+    # healthy manager as "unhealthy" (KI-002). Keep the port in sync with
+    # HTTP_PORT above.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:9100/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
     networks:
       - gw-ext-net
     # no ports: section — manager is never internet-facing (RFC §19.5)

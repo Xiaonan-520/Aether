@@ -184,6 +184,8 @@ interface ApiKeyRow {
   last_used_at: number | null
   expires_at: number | null
   revoked_at: number | null
+  /** Present from schema v4; undefined for rows read on an older database. */
+  created_by?: string | null
 }
 
 function rowToApiKey(r: ApiKeyRow): ApiKeyRecord {
@@ -197,6 +199,7 @@ function rowToApiKey(r: ApiKeyRow): ApiKeyRecord {
     lastUsedAt: r.last_used_at,
     expiresAt: r.expires_at,
     revokedAt: r.revoked_at,
+    createdBy: r.created_by ?? null,
   }
 }
 
@@ -724,8 +727,8 @@ export class SqliteStore implements StoreGateway {
     try {
       this.db
         .prepare(
-          `INSERT INTO api_keys (id, name, key_prefix, key_hash, enabled, created_at, last_used_at, expires_at, revoked_at)
-           VALUES (@id, @name, @keyPrefix, @keyHash, @enabled, @createdAt, @lastUsedAt, @expiresAt, @revokedAt)`,
+          `INSERT INTO api_keys (id, name, key_prefix, key_hash, enabled, created_at, last_used_at, expires_at, revoked_at, created_by)
+           VALUES (@id, @name, @keyPrefix, @keyHash, @enabled, @createdAt, @lastUsedAt, @expiresAt, @revokedAt, @createdBy)`,
         )
         .run({
           id: record.id,
@@ -737,6 +740,7 @@ export class SqliteStore implements StoreGateway {
           lastUsedAt: record.lastUsedAt,
           expiresAt: record.expiresAt,
           revokedAt: record.revokedAt,
+          createdBy: record.createdBy,
         })
       return { ok: true }
     } catch (err) {
@@ -841,6 +845,20 @@ export class SqliteStore implements StoreGateway {
     return (this.db
       .prepare('SELECT COUNT(*) AS n FROM admin_users')
       .get() as { n: number }).n
+  }
+
+  updateAdminPassword(id: string, passwordHash: string, at: number): StoreResult {
+    const info = this.db
+      .prepare('UPDATE admin_users SET password_hash = ?, updated_at = ? WHERE id = ?')
+      .run(passwordHash, at, id)
+    return info.changes > 0 ? { ok: true } : { ok: false, error: `admin user "${id}" not found` }
+  }
+
+  revokeAdminSessionsForUser(userId: string, at: number): number {
+    const info = this.db
+      .prepare('UPDATE admin_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL')
+      .run(at, userId)
+    return info.changes
   }
 
   // -- admin sessions ---------------------------------------------------------

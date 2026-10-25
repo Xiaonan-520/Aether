@@ -2,10 +2,23 @@
  * Console shell: top bar, auth gate, routing. Data itself lives in pages —
  * this file only decides whether the console can talk to the core.
  */
+import * as React from 'react'
 import { MotionConfig } from 'motion/react'
 import { useRoute } from '@/lib/router'
-import { AuthGate, useAuth } from '@/components/auth-gate'
+import { AuthGate, useAuth, MIN_PASSWORD_LENGTH } from '@/components/auth-gate'
+import { changePassword, storeToken, ApiError } from '@/lib/api'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Spinner } from '@/components/ui/spinner'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { MoonIcon, SunIcon } from 'lucide-react'
 import { HomePage } from './pages/home-page'
 import { ProviderPage } from './pages/provider-page'
@@ -37,6 +50,7 @@ function ConsoleShell({
 }) {
   const [route, navigate] = useRoute()
   const auth = useAuth()
+  const [passwordOpen, setPasswordOpen] = React.useState(false)
 
   return (
     <MotionConfig reducedMotion="user">
@@ -86,6 +100,12 @@ function ConsoleShell({
               ) : auth?.staticToken ? (
                 <span className="hidden text-xs text-muted-foreground md:inline">static admin token</span>
               ) : null}
+              {/* Only an account-backed session has a password to change. */}
+              {auth?.user ? (
+                <Button variant="ghost" size="sm" onClick={() => setPasswordOpen(true)}>
+                  Password
+                </Button>
+              ) : null}
               <Button
                 variant="ghost"
                 size="icon"
@@ -122,6 +142,156 @@ function ConsoleShell({
           </div>
         </footer>
       </div>
+
+      <PasswordDialog
+        open={passwordOpen}
+        onClose={() => setPasswordOpen(false)}
+        onChanged={(nextToken) => {
+          // The server revoked the old session and issued a new one; keep this
+          // tab signed in with it.
+          storeToken(nextToken)
+          setPasswordOpen(false)
+        }}
+      />
     </MotionConfig>
+  )
+}
+
+/**
+ * Change the signed-in admin's password.
+ *
+ * Requires the current password even though a session already exists: a
+ * stolen session must not be enough to lock the real owner out. The server
+ * revokes every session afterwards and returns a fresh one for this tab.
+ */
+function PasswordDialog({
+  open,
+  onClose,
+  onChanged,
+}: {
+  open: boolean
+  onClose: () => void
+  onChanged: (newToken: string) => void
+}) {
+  const [current, setCurrent] = React.useState('')
+  const [next, setNext] = React.useState('')
+  const [confirm, setConfirm] = React.useState('')
+  const [busy, setBusy] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+
+  const tooShort = next.length > 0 && next.length < MIN_PASSWORD_LENGTH
+  const mismatch = confirm.length > 0 && next !== confirm
+  const canSubmit =
+    current.length > 0 && next.length >= MIN_PASSWORD_LENGTH && next === confirm && !busy
+
+  const reset = () => {
+    setCurrent('')
+    setNext('')
+    setConfirm('')
+    setError(null)
+    setBusy(false)
+  }
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!canSubmit) return
+    setBusy(true)
+    setError(null)
+    try {
+      const session = await changePassword(current, next)
+      reset()
+      onChanged(session.token)
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        setError('Current password is incorrect.')
+      } else {
+        setError(err instanceof Error ? err.message : 'Could not change the password')
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) {
+          reset()
+          onClose()
+        }
+      }}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Change password</DialogTitle>
+          <DialogDescription>
+            Every other signed-in session is signed out. This browser stays signed in.
+          </DialogDescription>
+        </DialogHeader>
+        <form className="flex flex-col gap-3" onSubmit={submit}>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="pw-current">Current password</Label>
+            <Input
+              id="pw-current"
+              type="password"
+              autoComplete="current-password"
+              value={current}
+              onChange={(e) => setCurrent(e.target.value)}
+              autoFocus
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="pw-new">New password</Label>
+            <Input
+              id="pw-new"
+              type="password"
+              autoComplete="new-password"
+              value={next}
+              onChange={(e) => setNext(e.target.value)}
+              aria-invalid={tooShort || undefined}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="pw-confirm">Confirm new password</Label>
+            <Input
+              id="pw-confirm"
+              type="password"
+              autoComplete="new-password"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              aria-invalid={mismatch || undefined}
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            At least {MIN_PASSWORD_LENGTH} characters, stored as a salted scrypt digest.
+          </p>
+          {tooShort ? (
+            <p className="text-sm text-destructive" role="alert">
+              Password must be at least {MIN_PASSWORD_LENGTH} characters.
+            </p>
+          ) : null}
+          {mismatch ? (
+            <p className="text-sm text-destructive" role="alert">
+              Passwords do not match.
+            </p>
+          ) : null}
+          {error ? (
+            <p className="text-sm text-destructive" role="alert">
+              {error}
+            </p>
+          ) : null}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => { reset(); onClose() }} disabled={busy}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={!canSubmit}>
+              {busy ? <Spinner data-icon="inline-start" /> : null}
+              Update password
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }

@@ -16,6 +16,7 @@ export const MANAGER_ROUTES = {
   list: 'GET /api/extensions',
   get: 'GET /api/extensions/:id',
   available: 'GET /api/extensions/available',
+  inspectImage: 'POST /api/extensions/inspect-image',
   install: 'POST /api/extensions/install',
   stop: 'POST /api/extensions/:id/stop',
   restart: 'POST /api/extensions/:id/restart',
@@ -68,6 +69,7 @@ export interface InstallRequestBody {
 
 const TIMEOUTS = {
   read: 5_000,
+  inspectImage: 60_000,
   install: 180_000,
   lifecycle: 60_000,
   upgrade: 180_000,
@@ -103,6 +105,15 @@ export class ManagerClient {
   /** Sealed registration package — token material, manager-internal only. */
   registrationPackage(extensionId: string): Promise<{ manifest: unknown; endpointUrl: string; token: string }> {
     return this.requestWithRetry('GET', `/api/extensions/${encodeURIComponent(extensionId)}/registration`, undefined, TIMEOUTS.registration) as Promise<{ manifest: unknown; endpointUrl: string; token: string }>
+  }
+
+  /**
+   * Ask the manager to run a throwaway probe container and return the manifest
+   * the image serves. Read-only with respect to persisted state: nothing is
+   * recorded, so a retry is harmless.
+   */
+  inspectImage(image: { repo: string; tag: string; digest?: string }): Promise<{ manifest: unknown; digest: string }> {
+    return this.request('POST', '/api/extensions/inspect-image', { image }, TIMEOUTS.inspectImage) as Promise<{ manifest: unknown; digest: string }>
   }
 
   // -- mutations (never retried) --------------------------------------------

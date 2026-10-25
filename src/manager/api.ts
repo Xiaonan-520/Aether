@@ -68,6 +68,21 @@ async function handle(opts: ManagerApiOptions, req: IncomingMessage, res: Server
       send(res, 200, { extensions: await opts.manager.listRegisterable() })
       return
     }
+    // Read an image's manifest without installing it (KI-001). The console
+    // uses this so an operator only has to name an image, not extract and
+    // paste a manifest by hand.
+    if (req.method === 'POST' && path === '/api/extensions/inspect-image') {
+      const body = await readJson(req) as { image?: { repo?: string; tag?: string; digest?: string } } | undefined
+      const repo = body?.image?.repo
+      const tag = body?.image?.tag
+      if (typeof repo !== 'string' || typeof tag !== 'string') {
+        send(res, 400, { error: 'body must be { image: { repo, tag, digest? } }' })
+        return
+      }
+      const inspected = await opts.manager.inspectImage({ repo, tag, digest: body?.image?.digest })
+      send(res, 200, inspected)
+      return
+    }
     if (req.method === 'POST' && path === '/api/extensions/install') {
       const body = await readJson(req) as { manifest?: unknown; image?: { repo: string; tag: string; digest?: string } } | undefined
       if (!body || typeof body !== 'object' || !('manifest' in body) || typeof body.manifest !== 'object') {

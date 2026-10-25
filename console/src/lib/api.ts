@@ -172,6 +172,37 @@ export async function logoutAdmin(): Promise<void> {
   }
 }
 
+/**
+ * Change the admin password. The server revokes every other session and
+ * returns a fresh one, so the caller stays signed in on this device only.
+ */
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<AuthSession> {
+  let res: Response
+  try {
+    res = await fetch('/api/auth/password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaderIfAny() },
+      body: JSON.stringify({ currentPassword, newPassword }),
+    })
+  } catch {
+    throw new ApiError(0, 'Network error — the gateway is unreachable')
+  }
+  if (!res.ok) {
+    let message = `Request failed (${res.status})`
+    try {
+      const body = (await res.json()) as { message?: string; error?: string }
+      if (body.message) message = body.message
+    } catch {
+      /* keep default */
+    }
+    throw new ApiError(res.status, message)
+  }
+  return (await res.json()) as AuthSession
+}
+
 function authHeaderIfAny(): Record<string, string> {
   const token = getStoredToken()
   return token ? { Authorization: `Bearer ${token}` } : {}
@@ -369,6 +400,8 @@ export interface ApiKeyView {
   lastUsedAt: number | null
   expiresAt: number | null
   revokedAt: number | null
+  /** Admin email that created the key; null for legacy/static-token keys. */
+  createdBy: string | null
 }
 
 /** Create response: the one-and-only time the full key leaves the core. */
@@ -465,6 +498,16 @@ export const extensionsApi = {
       method: 'POST',
       body: JSON.stringify({ manifest, image }),
     }),
+
+  /**
+   * Install by image name only. The core probes the image for its manifest,
+   * so the operator never handles manifest JSON (KI-001).
+   */
+  installFromImage: (image: { repo: string; tag: string; digest?: string }) =>
+    lifecycle<{ extensionId: string; status: string; providers?: Array<{ id: string; displayName: string }> }>(
+      '/api/console/extensions/install-from-image',
+      { method: 'POST', body: JSON.stringify({ image }) },
+    ),
 
   upgrade: (id: string, manifest: unknown, image?: { repo: string; tag: string; digest?: string }) =>
     lifecycle<{ extensionId: string; status: string }>(

@@ -153,6 +153,32 @@ export class ExtensionService {
 
   // -- lifecycle -------------------------------------------------------------
 
+  /**
+   * Install by image name alone (KI-001).
+   *
+   * The console no longer asks an operator to extract a manifest by hand: Core
+   * asks the manager to probe the image, then runs the normal install path
+   * with the manifest the image itself serves. The trust checks are identical
+   * to `install()` — this only removes the manual manifest step, not the
+   * validation.
+   */
+  async installFromImage(body: { image?: { repo?: string; tag?: string; digest?: string } }): Promise<unknown> {
+    const repo = typeof body?.image?.repo === 'string' ? body.image.repo.trim() : ''
+    const tag = typeof body?.image?.tag === 'string' ? body.image.tag.trim() : ''
+    if (!repo || !tag) {
+      throw new OpenAIApiError(400, 'invalid_request_error', 'image.repo and image.tag are required',
+        'invalid_request')
+    }
+    let manifest: unknown
+    try {
+      const probed = await this.client.inspectImage({ repo, tag, digest: body.image?.digest })
+      manifest = probed.manifest
+    } catch (err) {
+      throw this.map(err)
+    }
+    return this.install({ manifest, image: { repo, tag, digest: body.image?.digest } })
+  }
+
   async install(body: { manifest: unknown; image?: { repo: string; tag: string; digest?: string } }): Promise<unknown> {
     const manifest = assertManifestObject(body?.manifest)
     const extensionId = assertExtensionId(manifest?.extension?.id)

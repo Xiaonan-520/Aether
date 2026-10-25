@@ -338,6 +338,75 @@ export class ExtensionManager {
     return this.store.list().filter((r) => r.status === 'installed')
   }
 
+  /**
+   * Read the manifest an image actually serves, without installing it.
+   *
+   * Why this exists (KI-001): previously the only way to obtain a manifest was
+   * to start a throwaway container yourself, copy the JSON out and paste it
+   * into the install request. That made installation a shell exercise. The
+   * Manager already knows how to create hardened containers, so it can do the
+   * probe itself and hand the manifest back.
+   *
+   * The probe container uses the same sanitized spec builder as a real install
+   * (hardened, no port bindings, no host volumes), gets a throwaway token, and
+   * is always removed. It never touches an extension's named volume because
+   * the probe maps no volumes at all.
+   */
+  async inspectImage(image: ImageRef): Promise<{ manifest: ExtensionManifest; digest: string }> {
+    if (!image.repo || !image.tag) throw new Error('image.repo and image.tag are required')
+    if (image.tag === 'latest') throw new Error('"latest" is not an immutable install target')
+
+    const { digest } = await this.runtime.pullImage(image)
+    const probeId = `probe-${randomBytes(6).toString('hex')}`
+    // A throwaway token: the probe only needs to satisfy the extension's own
+    // auth gate long enough to read /manifest.
+    const probeToken = randomBytes(32).toString('base64url')
+
+    let handle: Awaited<ReturnType<ContainerRuntime['createContainer']>> | undefined
+    try {
+      // Minimal spec: no volumes, no operator env. We do not know the manifest
+      // yet, so port/env/volumes come from a deliberately empty shell manifest
+      // that still exercises the hardened path.
+      const spec = sanitizeRuntime({
+        manifest: probeManifestShell(probeId),
+        image: { ...image, digest },
+        injectedEnv: {
+          GATEWAY_EXTENSION_TOKEN: probeToken,
+          GATEWAY_EXTENSION_ID: probeId,
+        },
+        limits: { network: this.network, operatorEnv: {} },
+      })
+      handle = await this.runtime.createContainer(spec)
+      await this.runtime.start(handle.containerId)
+
+      const manifest = await this.withTimeout(
+        this.fetchServedManifest(handle.endpointUrl, probeToken),
+        30_000,
+        'probe did not serve /manifest within 30s',
+      )
+      return { manifest, digest }
+    } finally {
+      if (handle) {
+        await this.runtime.stop(handle.containerId, 5_000).catch(() => undefined)
+        await this.runtime.remove(handle.containerId).catch(() => undefined)
+      }
+    }
+  }
+
+  private async withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
+    let timer: NodeJS.Timeout | undefined
+    try {
+      return await Promise.race([
+        p,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(message)), ms)
+        }),
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
   // -------------------------------------------------------------------------
   // internals
   // -------------------------------------------------------------------------
@@ -555,4 +624,32 @@ export function sha256Hex(value: string): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * The manifest shell used only to build a hardened probe container before the
+ * real manifest is known. It declares no volumes and no required env, so the
+ * sanitized spec is the smallest thing that can run an extension image.
+ * `inspectImage` never persists anything derived from it.
+ */
+function probeManifestShell(probeId: string): ExtensionManifest {
+  return {
+    apiVersion: '1.0',
+    extension: {
+      id: probeId,
+      version: '0.0.0',
+      displayName: 'manifest probe',
+      description: 'temporary container used to read an image manifest',
+      author: 'manager',
+      license: 'MIT',
+    },
+    runtime: {
+      port: 8080,
+      healthPath: '/health',
+      env: [],
+      volumes: [],
+    },
+    providers: [],
+    security: { permissions: {} },
+  } as unknown as ExtensionManifest
 }

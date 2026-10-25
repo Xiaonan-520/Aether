@@ -27,6 +27,8 @@ export interface ApiKeyView {
   lastUsedAt: number | null
   expiresAt: number | null
   revokedAt: number | null
+  /** Admin email that created the key; null for legacy/static-token keys. */
+  createdBy: string | null
 }
 
 export interface CreatedApiKey extends ApiKeyView {
@@ -34,7 +36,7 @@ export interface CreatedApiKey extends ApiKeyView {
   key: string
 }
 
-function toView(record: ApiKeyRecord): ApiKeyView {
+function toView(record: ApiKeyRecord, ownerEmail: string | null = null): ApiKeyView {
   return {
     id: record.id,
     name: record.name,
@@ -44,6 +46,7 @@ function toView(record: ApiKeyRecord): ApiKeyView {
     lastUsedAt: record.lastUsedAt,
     expiresAt: record.expiresAt,
     revokedAt: record.revokedAt,
+    createdBy: ownerEmail,
   }
 }
 
@@ -51,7 +54,10 @@ export class ApiKeyService {
   constructor(private readonly ctx: ServiceContext) {}
 
   /** Issue a new key. Returns the full key exactly once. */
-  create(input: { name?: unknown; expiresAt?: unknown }): CreatedApiKey {
+  create(
+    input: { name?: unknown; expiresAt?: unknown },
+    creatorId: string | null = null,
+  ): CreatedApiKey {
     const name = typeof input.name === 'string' && input.name.trim().length > 0
       ? input.name.trim().slice(0, 120)
       : 'unnamed'
@@ -60,6 +66,10 @@ export class ApiKeyService {
       const value = Number(input.expiresAt)
       if (!Number.isFinite(value) || value <= 0) {
         throw new OpenAIApiError(400, 'invalid_request_error', 'expiresAt must be a positive epoch-millisecond number')
+      }
+      // A key that is already expired at creation would be a silent footgun.
+      if (Math.floor(value) <= this.ctx.now()) {
+        throw new OpenAIApiError(400, 'invalid_request_error', 'expiresAt must be in the future')
       }
       expiresAt = Math.floor(value)
     }
@@ -76,18 +86,25 @@ export class ApiKeyService {
       lastUsedAt: null,
       expiresAt,
       revokedAt: null,
+      createdBy: creatorId,
     }
     const result = this.ctx.store.createApiKey(record)
     if (!result.ok) {
       throw new OpenAIApiError(409, 'invalid_request_error', result.error)
     }
     this.audit('apikey.created', `api key ${record.id} ("${name}") created`, record.id)
-    return { ...toView(record), key }
+    return { ...toView(record, this.ownerEmailOf(creatorId)), key }
   }
 
   /** Redacted listing — no key, no hash. */
   list(): ApiKeyView[] {
-    return this.ctx.store.listApiKeys().map(toView)
+    return this.ctx.store.listApiKeys().map((r) => toView(r, this.ownerEmailOf(r.createdBy)))
+  }
+
+  /** Resolve an admin id to its email for display; null when unknown. */
+  private ownerEmailOf(userId: string | null): string | null {
+    if (!userId) return null
+    return this.ctx.store.getAdminUserById(userId)?.email ?? null
   }
 
   /** Soft-revoke (and disable) a key by id. */
