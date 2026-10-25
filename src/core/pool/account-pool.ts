@@ -77,6 +77,7 @@ export class AccountPool {
       .filter((a) => AccountPool.isSelectable(a, now))
       .filter((a) => this.deps.hasCredential(a))
       .filter((a) => opts.model === undefined || AccountPool.rateLimitCleared(a, opts.model, now))
+      .filter((a) => opts.model === undefined || AccountPool.supportsModel(a, opts.model))
       .filter((a) => !(this.isTokenExpired(a, now) && !a.refreshable))
 
     if (candidates.length === 0) return null
@@ -139,6 +140,24 @@ export class AccountPool {
     const limit = account.modelRateLimits[model]
     if (!limit) return true
     return limit.resetAtMs <= now
+  }
+
+  /**
+   * Account-level model capability.
+   *
+   * Some accounts of the same provider are entitled to different model
+   * catalogs. When an account declares its catalog in
+   * `providerMetadataJson.models` (an array of upstream model ids or public
+   * `provider::model` ids), an account that explicitly does not list the
+   * requested model is skipped. Unknown metadata means "no per-account
+   * evidence" and stays eligible: the conservative default is to try, because
+   * a false negative would silently remove a working account.
+   */
+  static supportsModel(account: Account, model: string): boolean {
+    const declared = declaredModelsOf(account)
+    if (declared === null) return true
+    if (declared.length === 0) return false
+    return declared.some((entry) => entry === model || entry.endsWith(`::${model}`))
   }
 
   /**
@@ -259,3 +278,22 @@ function priorityOf(account: Account): number {
 }
 
 export type { ModelRateLimit }
+
+/**
+ * Read an account's declared model catalog. Returns null when the account does
+ * not declare one (unknown → eligible), and a (possibly empty) array when it
+ * does.
+ */
+function declaredModelsOf(account: Account): string[] | null {
+  if (!account.providerMetadataJson) return null
+  let meta: unknown
+  try {
+    meta = JSON.parse(account.providerMetadataJson)
+  } catch {
+    return null
+  }
+  if (!meta || typeof meta !== 'object') return null
+  const models = (meta as { models?: unknown }).models
+  if (!Array.isArray(models)) return null
+  return models.filter((value): value is string => typeof value === 'string' && value.length > 0)
+}
