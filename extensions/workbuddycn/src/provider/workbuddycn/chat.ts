@@ -173,8 +173,49 @@ function normalizeTool(tool: unknown): unknown {
   return { type: 'function', function: { name: record?.name, description: record?.description, parameters: record?.parameters } }
 }
 
+/** Upper bound for an upstream Retry-After; keeps a bad header from parking an account for days. */
+const MAX_RETRY_AFTER_MS = 6 * 60 * 60 * 1000
+
+/**
+ * Parse an HTTP `Retry-After` header into milliseconds.
+ *
+ * The header has two legal forms (RFC 9110 §10.2.3): delay-seconds and an
+ * HTTP-date. Both are accepted here. Missing, malformed, negative and
+ * non-finite values yield `undefined` so the caller falls back to Core's
+ * default bounded cooldown instead of inventing a wait time.
+ */
+export function parseRetryAfterMs(
+  value: string | null | undefined,
+  now = Date.now(),
+): number | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  if (trimmed.length === 0) return undefined
+
+  // delay-seconds: digits only (a leading '-' is rejected, not treated as 0)
+  if (/^\d+$/.test(trimmed)) {
+    const seconds = Number.parseInt(trimmed, 10)
+    if (!Number.isFinite(seconds) || seconds < 0) return undefined
+    // absurd values are clamped rather than trusted as an unbounded cooldown
+    return Math.min(seconds * 1000, MAX_RETRY_AFTER_MS)
+  }
+
+  // HTTP-date. Require a letter so numeric-ish garbage like "1.5" is not
+  // interpreted as a date by the engine's lenient parser.
+  if (!/[A-Za-z]/.test(trimmed)) return undefined
+  const at = Date.parse(trimmed)
+  if (!Number.isFinite(at)) return undefined
+  const delta = at - now
+  if (delta <= 0) return 0 // a past date means "retry immediately"
+  return Math.min(delta, MAX_RETRY_AFTER_MS)
+}
+
 /** Map an upstream non-OK response to a ProtocolError (business codes first). */
-export function upstreamError(status: number, bodyText: string): ProtocolError {
+export function upstreamError(
+  status: number,
+  bodyText: string,
+  retryAfterMs?: number,
+): ProtocolError {
   const parsed = safeJson(bodyText)
   const code = parsed && typeof parsed.code === 'number' ? parsed.code : undefined
   const msg = parsed && typeof parsed.msg === 'string' ? parsed.msg
@@ -187,13 +228,14 @@ export function upstreamError(status: number, bodyText: string): ProtocolError {
   // branch (and checked before the HTTP status, so a 403 quota response is not
   // mistaken for a dead credential).
   if (code === 6004 || /频率限制|频率超出|rate.?limit|frequency limit|too many requests/i.test(msg)) {
-    return errors.rateLimit('upstream rate limit', { httpStatus: 429, retryable: true })
+    return errors.rateLimit('upstream rate limit', retryLimitOptions(retryAfterMs))
   }
   if (/使用量已超出|usage exceeds|insufficient.?quota|quota.?exceed|额度.{0,8}(超出|用尽|不足)|balance insufficient/i.test(msg)) {
+    // A quota exhaustion is not a rate limit: never attach Retry-After here.
     return errors.quotaExhausted('upstream quota exhausted', { httpStatus: status === 429 ? 429 : status })
   }
   if (status === 401 || status === 403) return errors.authInvalid(`upstream auth rejected (HTTP ${status})`, { httpStatus: status })
-  if (status === 429) return errors.rateLimit('upstream rate limit', { httpStatus: 429, retryable: true })
+  if (status === 429) return errors.rateLimit('upstream rate limit', retryLimitOptions(retryAfterMs))
   if (status >= 500) return errors.upstream5xx(`upstream HTTP ${status}`, { httpStatus: status })
   if (status === 400) {
     // Diagnostic (1.0.4): surface the upstream's own rejection reason (sanitized
@@ -205,6 +247,19 @@ export function upstreamError(status: number, bodyText: string): ProtocolError {
     })
   }
   return errors.terminal(`upstream HTTP ${status}`, { httpStatus: status })
+}
+
+/** Rate-limit options; Retry-After is forwarded only when it was parsed. */
+function retryLimitOptions(retryAfterMs: number | undefined): {
+  httpStatus: number
+  retryable: boolean
+  retryAfterMs?: number
+} {
+  return {
+    httpStatus: 429,
+    retryable: true,
+    ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+  }
 }
 
 /**
@@ -268,7 +323,8 @@ async function openUpstream(req: ExtensionChatRequest, deps: ChatDeps, signal?: 
   }
   if (!response.ok) {
     const text = await response.text().catch(() => '')
-    throw upstreamError(response.status, text)
+    const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'))
+    throw upstreamError(response.status, text, retryAfterMs)
   }
   if (!response.body) throw errors.emptyResponse('upstream returned an empty body')
   return { response }
