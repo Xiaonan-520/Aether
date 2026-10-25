@@ -161,13 +161,17 @@ describe('WorkBuddyCN multi-account selection', () => {
     expect(h.provider.chatCalls.map((c) => c.accountId)).toEqual(['workbuddycn-a2'])
   })
 
-  it('concurrent requests may select the same account (no lease/stickiness)', async () => {
+  it('spreads concurrent requests across accounts (in-flight lease)', async () => {
     const h = setup({ chatScript: [result('one'), result('two')] })
     const [a, b] = await Promise.all([h.chat.handle(chatReq), h.chat.handle(chatReq)])
     expect(a.kind).toBe('result')
     expect(b.kind).toBe('result')
     expect(h.provider.chatCalls).toHaveLength(2)
-    expect(h.provider.chatCalls.map((c) => c.accountId)).toEqual(['workbuddycn-a1', 'workbuddycn-a1'])
+    // The first request holds a slot on a1 while the second selects, so the
+    // second one lands on a2 instead of both hammering the same account.
+    expect(
+      h.provider.chatCalls.map((c) => c.accountId).sort(),
+    ).toEqual(['workbuddycn-a1', 'workbuddycn-a2'])
   })
 })
 

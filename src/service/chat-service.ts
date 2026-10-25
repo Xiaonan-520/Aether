@@ -160,6 +160,10 @@ export class ChatService {
       })
       if (!selected) break
       const account = selected.account
+      // The in-flight slot is held for exactly as long as one attempt uses the
+      // account: released here on failure, after a non-streaming result, or by
+      // the wrapped stream's finally (including client cancellation).
+      const releaseLease = selected.release
 
       try {
         const pctx = this.providerCtx(provider, account)
@@ -187,7 +191,13 @@ export class ChatService {
             await closeIterator(iterator)
             return {
               kind: 'stream',
-              stream: this.wrappedStream(emptyChunks(), provider, entry.upstreamModel, account),
+              stream: this.wrappedStream(
+                emptyChunks(),
+                provider,
+                entry.upstreamModel,
+                account,
+                releaseLease,
+              ),
               accountId: account.id,
               provider,
               upstreamModel: entry.upstreamModel,
@@ -200,6 +210,7 @@ export class ChatService {
               provider,
               entry.upstreamModel,
               account,
+              releaseLease,
             ),
             accountId: account.id,
             provider,
@@ -208,6 +219,7 @@ export class ChatService {
         }
         const result = await adapter.chat.chat(pctx, upstreamReq, account, req.tools)
         this.ctx.pool.reportResult(account)
+        releaseLease()
         this.record(provider, account.id, 'chat.success', 'chat completed')
         return {
           kind: 'result',
@@ -219,6 +231,7 @@ export class ChatService {
       } catch (err) {
         const error = this.asUpstreamError(err, provider)
         lastError = error
+        releaseLease()
 
         // Extension-hop credential mismatch (token rotated by the Manager).
         // This says NOTHING about the provider account: the account is healthy
@@ -276,6 +289,7 @@ export class ChatService {
     provider: string,
     model: string,
     account: Account,
+    releaseLease: () => void,
   ): AsyncGenerator<ChatChunk> {
     let emitted = false
     try {
@@ -292,6 +306,10 @@ export class ChatService {
       // Mid-stream failure: rethrow as a terminal error; the HTTP layer has
       // already started the SSE response, so it will emit an error frame.
       throw error
+    } finally {
+      // Covers every exit: completion, mid-stream error, and a consumer that
+      // stops early (client disconnect) which unwinds through generator.return().
+      releaseLease()
     }
     void emitted
   }
