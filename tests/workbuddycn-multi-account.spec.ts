@@ -233,10 +233,9 @@ describe('WorkBuddyCN multi-account failover', () => {
     expect(h.provider.chatCalls.map((c) => c.accountId)).toEqual(['workbuddycn-a1', 'workbuddycn-a2'])
 
     // Both cooldowns are active; selection must return null, not hammer either.
-    // As above, Core currently filters the model before the 503 path when no
-    // account is usable, so the second request is a 404 — the important part is
-    // that neither cooled account was called again.
-    await expect(h.chat.handle(chatReq)).rejects.toMatchObject({ status: 404 })
+    // The model still exists, so this is a service-availability 503 — not a 404
+    // that would make the client drop a valid model id.
+    await expect(h.chat.handle(chatReq)).rejects.toMatchObject({ status: 503 })
     expect(h.provider.chatCalls).toHaveLength(2)
   })
 
@@ -247,11 +246,11 @@ describe('WorkBuddyCN multi-account failover', () => {
         account('workbuddycn-a2', { status: 'disabled', enabled: false }),
       ],
     })
-    // Current Core behavior: the model is filtered from routing when no account
-    // is usable, so the request fails as "model not found". The 503 branch in
-    // toClientError is only reachable after attempts have parked every account.
-    // This is recorded as a semantic gap, not changed here (public API status).
-    await expect(h.chat.handle(chatReq)).rejects.toMatchObject({ status: 404 })
+    // The model exists; every account that could serve it is unavailable. This
+    // must be a diagnosable 503, never "model not found".
+    const error = await h.chat.handle(chatReq).catch((err: unknown) => err)
+    expect(error).toMatchObject({ status: 503 })
+    expect((error as Error).message).toContain('no available account')
     expect(h.provider.chatCalls).toHaveLength(0)
   })
 })
