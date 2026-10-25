@@ -17,6 +17,12 @@ const FAILURE_COOLDOWN_BASE_MS = 60_000
 const FAILURE_COOLDOWN_MAX_MS = 30 * 60_000
 /** Default per-model rate-limit window when upstream gives no retry-after. */
 const DEFAULT_RATE_LIMIT_MS = 60_000
+/**
+ * Statuses that mean the account is healthy now. `healthy_low_quota` is still
+ * routable and must stay in this tier; all other selectable statuses are
+ * recovering accounts whose cooldown has expired.
+ */
+const HEALTHY_STATUSES = new Set<Account['status']>(['active', 'healthy_low_quota'])
 
 export interface SelectOptions {
   /** requested model (upstream id) for per-model rate-limit filtering */
@@ -58,7 +64,8 @@ export class AccountPool {
   /**
    * Pick the best available account for a provider.
    * Order: not-excluded → enabled + selectable status → credential present →
-   * per-model rate-limit window passed → cooldown passed → priority then LRU.
+   * per-model rate-limit window passed → cooldown passed → healthy tier →
+   * priority then LRU.
    */
   async selectAccount(provider: string, opts: SelectOptions = {}): Promise<SelectedAccount | null> {
     const now = this.now()
@@ -74,15 +81,23 @@ export class AccountPool {
 
     if (candidates.length === 0) return null
 
+    // Accounts whose cooldown just expired are selectable again, but an account
+    // that keeps failing never advances lastSuccessAt and therefore stays at
+    // the front of the LRU order. Prefer accounts that are healthy right now;
+    // recovering accounts remain fallbacks when no healthy account can serve
+    // this request. This is a status tier, not a priority override.
+    const healthy = candidates.filter((a) => HEALTHY_STATUSES.has(a.status))
+    const pool = healthy.length > 0 ? healthy : candidates
+
     // manual priority (provider metadata `priority`), then least-recently-used
-    candidates.sort((a, b) => {
+    pool.sort((a, b) => {
       const pa = priorityOf(a)
       const pb = priorityOf(b)
       if (pa !== pb) return pb - pa
       return (a.lastSuccessAt ?? 0) - (b.lastSuccessAt ?? 0)
     })
 
-    for (const candidate of candidates) {
+    for (const candidate of pool) {
       if (this.isTokenExpired(candidate, now) && candidate.refreshable) {
         try {
           const refreshed = await this.deps.refreshAccount?.(candidate)

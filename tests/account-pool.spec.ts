@@ -123,6 +123,96 @@ describe('account pool — selection', () => {
     expect((await h.select('codearts'))?.account.id).toBe('stale')
   })
 
+  it('prefers a healthy account over a rate-limited account whose cooldown just expired', async () => {
+    const h = new Harness(
+      makeAccount({
+        id: 'recovered',
+        status: 'rate_limited',
+        cooldownUntil: 900_000,
+        lastSuccessAt: 0,
+      }),
+      makeAccount({ id: 'healthy', status: 'active', lastSuccessAt: 900_000 }),
+    )
+    expect((await h.select('codearts'))?.account.id).toBe('healthy')
+  })
+
+  it('keeps healthy_low_quota in the healthy tier', async () => {
+    const h = new Harness(
+      makeAccount({
+        id: 'recovered',
+        status: 'rate_limited',
+        cooldownUntil: 900_000,
+        lastSuccessAt: 0,
+      }),
+      makeAccount({ id: 'low-quota', status: 'healthy_low_quota', lastSuccessAt: 900_000 }),
+    )
+    expect((await h.select('codearts'))?.account.id).toBe('low-quota')
+  })
+
+  it('does not select a rate-limited account while its cooldown is still active', async () => {
+    const h = new Harness(
+      makeAccount({
+        id: 'cooling',
+        status: 'rate_limited',
+        cooldownUntil: 2_000_000,
+        lastSuccessAt: 0,
+      }),
+      makeAccount({ id: 'healthy', status: 'active' }),
+    )
+    expect((await h.select('codearts'))?.account.id).toBe('healthy')
+  })
+
+  it('uses a recovered account as the fallback when the healthy candidate is disabled', async () => {
+    const h = new Harness(
+      makeAccount({ id: 'recovered', status: 'rate_limited', cooldownUntil: 900_000 }),
+      makeAccount({ id: 'disabled', enabled: false }),
+    )
+    expect((await h.select('codearts'))?.account.id).toBe('recovered')
+  })
+
+  it('uses a recovered account as the fallback when the healthy candidate has no credential', async () => {
+    const h = new Harness(
+      makeAccount({ id: 'recovered', status: 'rate_limited', cooldownUntil: 900_000 }),
+      makeAccount({ id: 'no-credential', credentialKey: 'MISSING_NO_CREDENTIAL' }),
+    )
+    expect((await h.select('codearts'))?.account.id).toBe('recovered')
+  })
+
+  it('uses a recovered account as the fallback when the healthy candidate is excluded', async () => {
+    const h = new Harness(
+      makeAccount({ id: 'recovered', status: 'rate_limited', cooldownUntil: 900_000 }),
+      makeAccount({ id: 'healthy', status: 'active' }),
+    )
+    expect((await h.select('codearts', undefined, new Set(['healthy'])))?.account.id).toBe(
+      'recovered',
+    )
+  })
+
+  it('keeps priority/LRU ordering when every candidate is recovering', async () => {
+    const h = new Harness(
+      makeAccount({
+        id: 'recent',
+        status: 'rate_limited',
+        cooldownUntil: 900_000,
+        lastSuccessAt: 900_000,
+      }),
+      makeAccount({
+        id: 'stale',
+        status: 'cooldown',
+        cooldownUntil: 900_000,
+        lastSuccessAt: 100_000,
+      }),
+    )
+    expect((await h.select('codearts'))?.account.id).toBe('stale')
+  })
+
+  it('still selects a single rate-limited account after its cooldown expires', async () => {
+    const h = new Harness(
+      makeAccount({ id: 'only', status: 'rate_limited', cooldownUntil: 900_000 }),
+    )
+    expect((await h.select('codearts'))?.account.id).toBe('only')
+  })
+
   it('returns null when nothing is selectable', async () => {
     const h = new Harness(makeAccount({ id: 'a1', status: 'disabled', enabled: false }))
     expect(await h.select('codearts')).toBeNull()

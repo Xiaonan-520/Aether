@@ -143,6 +143,24 @@ describe('WorkBuddyCN multi-account selection', () => {
     if (outcome.kind === 'result') expect(outcome.accountId).toBe('workbuddycn-a2')
   })
 
+  it('prefers a healthy account over a just-recovered rate-limited account', async () => {
+    const h = setup({
+      accounts: [
+        account('workbuddycn-a1', {
+          status: 'rate_limited',
+          cooldownUntil: 1,
+          lastSuccessAt: 0,
+        }),
+        account('workbuddycn-a2', { status: 'active', lastSuccessAt: 1_000 }),
+      ],
+      chatScript: [result('a2')],
+    })
+    const outcome = await h.chat.handle(chatReq)
+    expect(outcome.kind).toBe('result')
+    if (outcome.kind === 'result') expect(outcome.accountId).toBe('workbuddycn-a2')
+    expect(h.provider.chatCalls.map((c) => c.accountId)).toEqual(['workbuddycn-a2'])
+  })
+
   it('concurrent requests may select the same account (no lease/stickiness)', async () => {
     const h = setup({ chatScript: [result('one'), result('two')] })
     const [a, b] = await Promise.all([h.chat.handle(chatReq), h.chat.handle(chatReq)])
