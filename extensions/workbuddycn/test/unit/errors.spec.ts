@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 import {
   errors, ProtocolError, isProtocolErrorKind, kindForUpstreamStatus, UPSTREAM_ERROR_KINDS,
 } from '../../src/protocol/errors.js'
-import { upstreamError } from '../../src/provider/workbuddycn/chat.js'
+import { upstreamError, parseRetryAfterMs } from '../../src/provider/workbuddycn/chat.js'
 
 describe('protocol error mapping', () => {
   it('exposes exactly the Gateway UpstreamErrorKind vocabulary + PROTOCOL_VIOLATION', () => {
@@ -81,5 +81,61 @@ describe('WorkBuddyCN upstream error classification', () => {
     const err = upstreamError(400, body('invalid parameter'))
     expect(err.kind).toBe('TERMINAL')
     expect(err.retryable).toBe(false)
+  })
+})
+
+describe('WorkBuddyCN Retry-After parsing', () => {
+  const NOW = Date.parse('2026-10-25T00:00:00Z')
+
+  it('parses delay-seconds', () => {
+    expect(parseRetryAfterMs('120', NOW)).toBe(120_000)
+    expect(parseRetryAfterMs('0', NOW)).toBe(0)
+    expect(parseRetryAfterMs('1', NOW)).toBe(1_000)
+  })
+
+  it('parses an HTTP-date relative to now', () => {
+    const future = new Date(NOW + 45_000).toUTCString()
+    expect(parseRetryAfterMs(future, NOW)).toBe(45_000)
+  })
+
+  it('treats a past HTTP-date as retry immediately', () => {
+    const past = new Date(NOW - 60_000).toUTCString()
+    expect(parseRetryAfterMs(past, NOW)).toBe(0)
+  })
+
+  it('returns undefined for missing, empty, malformed and negative values', () => {
+    expect(parseRetryAfterMs(null, NOW)).toBeUndefined()
+    expect(parseRetryAfterMs(undefined, NOW)).toBeUndefined()
+    expect(parseRetryAfterMs('', NOW)).toBeUndefined()
+    expect(parseRetryAfterMs('   ', NOW)).toBeUndefined()
+    expect(parseRetryAfterMs('abc', NOW)).toBeUndefined()
+    expect(parseRetryAfterMs('-30', NOW)).toBeUndefined()
+    expect(parseRetryAfterMs('1.5', NOW)).toBeUndefined()
+  })
+
+  it('clamps an absurd delay to a bounded cooldown', () => {
+    expect(parseRetryAfterMs(String(30 * 24 * 3600), NOW)).toBe(6 * 60 * 60 * 1000)
+  })
+
+  it('forwards Retry-After only on rate-limit errors', () => {
+    const limited = upstreamError(429, JSON.stringify({ code: 6004, msg: '频率限制' }), 90_000)
+    expect(limited.kind).toBe('RATE_LIMIT')
+    expect(limited.retryAfterMs).toBe(90_000)
+    expect(limited.toBody().error.retryAfterMs).toBe(90_000)
+
+    const quota = upstreamError(429, JSON.stringify({ msg: '使用量已超出' }), 90_000)
+    expect(quota.kind).toBe('QUOTA_EXHAUSTED')
+    expect(quota.retryAfterMs).toBeUndefined()
+
+    const auth = upstreamError(403, JSON.stringify({ msg: 'forbidden' }), 90_000)
+    expect(auth.kind).toBe('AUTH_INVALID')
+    expect(auth.retryAfterMs).toBeUndefined()
+  })
+
+  it('omits retryAfterMs when the header was absent', () => {
+    const limited = upstreamError(429, JSON.stringify({ msg: 'rate limit' }))
+    expect(limited.kind).toBe('RATE_LIMIT')
+    expect(limited.retryAfterMs).toBeUndefined()
+    expect(limited.toBody().error).not.toHaveProperty('retryAfterMs')
   })
 })
