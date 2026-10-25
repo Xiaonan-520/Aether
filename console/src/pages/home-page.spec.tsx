@@ -3,6 +3,29 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { HomePage } from './home-page'
 import { api, type ConsoleOverview, type ConsoleProvider, type QuotaResource } from '@/lib/api'
 
+type MotionDivProps = import('react').ComponentProps<'div'> & {
+  initial?: unknown
+  animate?: unknown
+  transition?: unknown
+}
+
+// happy-dom cancels native motion animations during cleanup and can surface an
+// unhandled AbortError. This test only asserts data rendering, so a plain div
+// keeps the component contract without starting animations.
+vi.mock('motion/react', async () => {
+  const React = await import('react')
+  return {
+    motion: {
+      div: ({ initial, animate, transition, ...props }: MotionDivProps) => {
+        void initial
+        void animate
+        void transition
+        return React.createElement('div', props)
+      },
+    },
+  }
+})
+
 function snapshot(unit: string, remaining: number, total: number) {
   return {
     accountId: 'ignored',
