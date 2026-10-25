@@ -24,6 +24,7 @@ import { HomePage } from './pages/home-page'
 import { ProviderPage } from './pages/provider-page'
 import { ExtensionsPage, ExtensionDetailPage } from './pages/extensions-page'
 import { KeysPage } from './pages/keys-page'
+import { RouteErrorBoundary } from './components/route-error-boundary'
 
 export function ConsoleApp({
   theme,
@@ -122,23 +123,24 @@ function ConsoleShell({
         </header>
 
         <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 sm:py-8">
-          {route.name === 'home' ? (
-            <HomePage />
-          ) : route.name === 'provider' ? (
-            <ProviderPage id={route.id} onBack={() => navigate('/')} />
-          ) : route.name === 'extensions' ? (
-            <ExtensionsPage onOpen={(id) => navigate(`#/extensions/${encodeURIComponent(id)}`)} />
-          ) : route.name === 'extension' ? (
-            <ExtensionDetailPage id={route.id} onBack={() => navigate('#/extensions')} />
-          ) : route.name === 'keys' ? (
-            <KeysPage />
-          ) : null}
+          <RouteErrorBoundary resetKey={`${route.name}:${'id' in route ? route.id : ''}`}>
+            {route.name === 'home' ? (
+              <HomePage />
+            ) : route.name === 'provider' ? (
+              <ProviderPage id={route.id} onBack={() => navigate('/')} />
+            ) : route.name === 'extensions' ? (
+              <ExtensionsPage onOpen={(id) => navigate(`#/extensions/${encodeURIComponent(id)}`)} />
+            ) : route.name === 'extension' ? (
+              <ExtensionDetailPage key={route.id} id={route.id} onBack={() => navigate('#/extensions')} />
+            ) : route.name === 'keys' ? (
+              <KeysPage />
+            ) : null}
+          </RouteErrorBoundary>
         </main>
 
         <footer className="border-t border-border/70 py-4">
           <div className="mx-auto w-full max-w-7xl px-4 text-xs text-muted-foreground sm:px-6">
-            Aether Core management console · data via <code className="font-mono">/api/*</code> · session
-            credential stays in this browser tab (sessionStorage)
+            Aether 管理控制台 · 登录状态仅保存在当前浏览器标签页
           </div>
         </footer>
       </div>

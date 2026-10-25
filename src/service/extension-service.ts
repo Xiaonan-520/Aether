@@ -31,6 +31,8 @@ export type HealthState = 'healthy' | 'degraded' | 'unknown'
 export interface ExtensionView {
   extensionId: string
   name: string
+  /** manifest-declared description, when available */
+  description: string | null
   version: string
   image: { repo: string; tag: string; digest: string | null }
   installState: string
@@ -104,7 +106,8 @@ export class ExtensionService {
     const providers = Array.isArray(rec.providerIds) ? rec.providerIds : []
     return {
       extensionId: rec.extensionId,
-      name: rec.extensionId,
+      name: rec.displayName?.trim() || rec.extensionId,
+      description: rec.description?.trim() || null,
       version: rec.version,
       image: { repo: rec.imageRepo, tag: rec.imageTag, digest: rec.imageDigest },
       installState: rec.status,

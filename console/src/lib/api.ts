@@ -443,17 +443,71 @@ export type HealthState = 'healthy' | 'degraded' | 'unknown'
 export interface ExtensionRecord {
   extensionId: string
   name: string
-  version: string
-  image: { repo: string; tag: string; digest: string | null }
-  installState: InstallState
+  /** null when the server payload omitted it; the UI renders 未知 rather than crashing */
+  version: string | null
+  image: { repo: string | null; tag: string | null; digest: string | null }
+  installState: InstallState | 'unknown'
   runtimeState: RuntimeState
   healthState: HealthState
   /** provider ids owned by this extension (1 extension : N providers) */
   providers: string[]
   providersRegistered: boolean
   lastError: string | null
-  installedAt: number
-  updatedAt: number
+  installedAt: number | null
+  updatedAt: number | null
+  /**
+   * false when the response was missing fields the console normally shows.
+   * The page still renders what exists and tells the user the data is incomplete.
+   */
+  complete: boolean
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
+}
+
+function text(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() !== '' ? value : null
+}
+
+/**
+ * Turn an untrusted wire payload into the shape the UI renders.
+ *
+ * The API is expected to be well-formed, but a malformed/legacy payload must
+ * never blank the page: missing values become explicit unknowns and `complete`
+ * lets the page show an honest "information incomplete" notice.
+ */
+export function normalizeExtensionRecord(raw: unknown, fallbackId?: string): ExtensionRecord | null {
+  const r = asRecord(raw)
+  const image = asRecord(r.image)
+  const extensionId = text(r.extensionId) ?? text(fallbackId)
+  if (!extensionId) return null
+  const version = text(r.version)
+  const repo = text(image.repo)
+  const tag = text(image.tag)
+  const installState = text(r.installState)
+  const name = text(r.name) ?? extensionId
+  const providers = Array.isArray(r.providers)
+    ? r.providers.filter((p): p is string => typeof p === 'string' && p !== '')
+    : []
+  const providedProviders = Array.isArray(r.providers)
+  return {
+    extensionId,
+    name,
+    version,
+    image: { repo, tag, digest: text(image.digest) },
+    installState: (installState ?? 'unknown') as ExtensionRecord['installState'],
+    runtimeState: (text(r.runtimeState) ?? 'unknown') as RuntimeState,
+    healthState: (text(r.healthState) ?? 'unknown') as HealthState,
+    providers,
+    providersRegistered: r.providersRegistered === true,
+    lastError: text(r.lastError),
+    installedAt: typeof r.installedAt === 'number' && Number.isFinite(r.installedAt) ? r.installedAt : null,
+    updatedAt: typeof r.updatedAt === 'number' && Number.isFinite(r.updatedAt) ? r.updatedAt : null,
+    complete: Boolean(version && repo && tag && installState && providedProviders && typeof r.installedAt === 'number'),
+  }
 }
 
 export interface AvailableExtension {
@@ -486,10 +540,23 @@ function lifecycle<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const extensionsApi = {
-  list: () => request<{ extensions: ExtensionRecord[] }>('/api/console/extensions'),
+  list: async (): Promise<{ extensions: ExtensionRecord[]; skipped: number }> => {
+    const raw = await request<unknown>('/api/console/extensions')
+    const body = asRecord(raw)
+    if (!Array.isArray(body.extensions)) {
+      throw new ApiError(502, '扩展列表返回的数据格式不正确')
+    }
+    const normalized = body.extensions.map((e) => normalizeExtensionRecord(e))
+    const extensions = normalized.filter((e): e is ExtensionRecord => e !== null)
+    return { extensions, skipped: normalized.length - extensions.length }
+  },
 
-  detail: (id: string) =>
-    request<ExtensionRecord>(`/api/console/extensions/${encodeURIComponent(id)}`),
+  detail: async (id: string): Promise<ExtensionRecord> => {
+    const raw = await request<unknown>(`/api/console/extensions/${encodeURIComponent(id)}`)
+    const record = normalizeExtensionRecord(raw, id)
+    if (!record) throw new ApiError(502, '扩展详情返回的数据不完整')
+    return record
+  },
 
   available: () => request<{ extensions: AvailableExtension[] }>('/api/console/extensions/available'),
 

@@ -60,6 +60,9 @@ export interface ManagerExtensionRecord {
   error: string | null
   installedAt: number
   updatedAt: number
+  /** Optional display metadata the manager reads from the stashed manifest. */
+  displayName?: string
+  description?: string
 }
 
 export interface InstallRequestBody {

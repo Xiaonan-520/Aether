@@ -121,42 +121,44 @@ export function formatQuota(
 import type { HealthState, InstallState, RuntimeState } from './api'
 
 export const INSTALL_STATE: Record<InstallState, StatusView> = {
-  pending: { label: 'Pending', severity: 'neutral' },
-  validating: { label: 'Validating', severity: 'warn' },
-  pulling: { label: 'Pulling', severity: 'warn' },
-  starting: { label: 'Starting', severity: 'warn' },
-  health_check: { label: 'Health check', severity: 'warn' },
-  conformance: { label: 'Conformance', severity: 'warn' },
-  registering: { label: 'Registering', severity: 'warn' },
-  installed: { label: 'Installed', severity: 'ok' },
-  stopped: { label: 'Stopped', severity: 'neutral' },
-  failed: { label: 'Failed', severity: 'error' },
-  removing: { label: 'Removing', severity: 'warn' },
+  pending: { label: '等待安装', severity: 'neutral' },
+  validating: { label: '正在检查', severity: 'warn' },
+  pulling: { label: '正在下载', severity: 'warn' },
+  starting: { label: '正在启动', severity: 'warn' },
+  health_check: { label: '正在检查运行状态', severity: 'warn' },
+  conformance: { label: '正在验证扩展', severity: 'warn' },
+  registering: { label: '正在接入', severity: 'warn' },
+  installed: { label: '已安装', severity: 'ok' },
+  stopped: { label: '已停止', severity: 'neutral' },
+  failed: { label: '安装或启动失败', severity: 'error' },
+  removing: { label: '正在移除', severity: 'warn' },
 }
 
 export const RUNTIME_STATE: Record<RuntimeState, StatusView> = {
-  running: { label: 'Running', severity: 'ok' },
-  stopped: { label: 'Not running', severity: 'neutral' },
-  unreachable: { label: 'Unreachable', severity: 'error' },
-  unknown: { label: 'Unknown', severity: 'neutral' },
+  running: { label: '运行中', severity: 'ok' },
+  stopped: { label: '未运行', severity: 'neutral' },
+  unreachable: { label: '无法连接', severity: 'error' },
+  unknown: { label: '未知', severity: 'neutral' },
 }
 
 export const HEALTH_STATE: Record<HealthState, StatusView> = {
-  healthy: { label: 'Healthy', severity: 'ok' },
-  degraded: { label: 'Degraded', severity: 'warn' },
-  unknown: { label: 'Unknown', severity: 'neutral' },
+  healthy: { label: '正常', severity: 'ok' },
+  degraded: { label: '部分异常', severity: 'warn' },
+  unknown: { label: '未知', severity: 'neutral' },
 }
 
-export function installState(s: InstallState): StatusView {
-  return INSTALL_STATE[s] ?? { label: s, severity: 'neutral' }
+const UNKNOWN_EXTENSION_STATE: StatusView = { label: '未知', severity: 'neutral' }
+
+export function installState(s: InstallState | string | null | undefined): StatusView {
+  return (s ? INSTALL_STATE[s as InstallState] : undefined) ?? UNKNOWN_EXTENSION_STATE
 }
 
-export function runtimeState(s: RuntimeState): StatusView {
-  return RUNTIME_STATE[s] ?? { label: s, severity: 'neutral' }
+export function runtimeState(s: RuntimeState | string | null | undefined): StatusView {
+  return (s ? RUNTIME_STATE[s as RuntimeState] : undefined) ?? UNKNOWN_EXTENSION_STATE
 }
 
-export function healthState(s: HealthState): StatusView {
-  return HEALTH_STATE[s] ?? { label: s, severity: 'neutral' }
+export function healthState(s: HealthState | string | null | undefined): StatusView {
+  return (s ? HEALTH_STATE[s as HealthState] : undefined) ?? UNKNOWN_EXTENSION_STATE
 }
 
 /**
@@ -164,8 +166,8 @@ export function healthState(s: HealthState): StatusView {
  * Derived from the three states, never from provider-specific knowledge.
  */
 export function extensionNextAction(v: {
-  installState: InstallState
-  runtimeState: RuntimeState
+  installState: InstallState | string
+  runtimeState: RuntimeState | string
   providersRegistered: boolean
 }): 'start' | 'reload' | 'none' {
   if (v.installState === 'stopped' || v.runtimeState === 'stopped') return 'start'

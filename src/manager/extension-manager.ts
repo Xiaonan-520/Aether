@@ -65,6 +65,16 @@ export interface RegistrationPackage {
   token: string
 }
 
+/**
+ * Read projection of an install record, enriched with the display metadata the
+ * extension's manifest declares. This is display-only: lifecycle still keys on
+ * extensionId; the manifest blob is already stored for upgrades/rollback.
+ */
+export interface ExtensionRecordView extends InstallRecord {
+  displayName?: string
+  description?: string
+}
+
 export class ExtensionManager {
   private readonly store: ManagerStore
   private readonly runtime: ContainerRuntime
@@ -220,8 +230,8 @@ export class ExtensionManager {
     }
   }
 
-  list(): InstallRecord[] {
-    return this.store.list()
+  list(): ExtensionRecordView[] {
+    return this.store.list().map((rec) => this.withDisplayMetadata(rec))
   }
 
   /**
@@ -329,13 +339,45 @@ export class ExtensionManager {
     this.store.putRegistrationToken(extensionId, this.registrationCipher.encryptJson(token))
   }
 
-  get(extensionId: string): InstallRecord | undefined {
-    return this.store.get(extensionId)
+  get(extensionId: string): ExtensionRecordView | undefined {
+    const rec = this.store.get(extensionId)
+    return rec ? this.withDisplayMetadata(rec) : undefined
   }
 
   /** Installed + healthy extensions a Core may register RemoteProviders from. */
-  async listRegisterable(): Promise<InstallRecord[]> {
-    return this.store.list().filter((r) => r.status === 'installed')
+  async listRegisterable(): Promise<ExtensionRecordView[]> {
+    return this.store.list()
+      .filter((r) => r.status === 'installed')
+      .map((rec) => this.withDisplayMetadata(rec))
+  }
+
+  /**
+   * Add the manifest's display name/description to a record for the console.
+   * Older or failed records may have no stashed manifest — those simply keep
+   * the extension id as the display name, so the projection never fails.
+   */
+  private withDisplayMetadata(rec: InstallRecord): ExtensionRecordView {
+    const json = this.store.getManifest(rec.extensionId)
+    if (!json) return rec
+    try {
+      const manifest = JSON.parse(json) as {
+        extension?: { displayName?: unknown; description?: unknown }
+      }
+      const displayName = typeof manifest.extension?.displayName === 'string'
+        ? manifest.extension.displayName.trim()
+        : ''
+      const description = typeof manifest.extension?.description === 'string'
+        ? manifest.extension.description.trim()
+        : ''
+      return {
+        ...rec,
+        ...(displayName ? { displayName } : {}),
+        ...(description ? { description } : {}),
+      }
+    } catch {
+      // Corrupt manifest blob: keep the record readable rather than hiding it.
+      return rec
+    }
   }
 
   /**

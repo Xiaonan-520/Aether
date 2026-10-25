@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { accountStatus, rollUpAccounts, formatQuota, formatTime, formatReset } from './status'
+import {
+  accountStatus,
+  rollUpAccounts,
+  formatQuota,
+  formatTime,
+  formatReset,
+  installState,
+  runtimeState,
+  healthState,
+  extensionNextAction,
+} from './status'
 
 describe('status — accountStatus mapping', () => {
   it('maps every known AccountStatus to a label and severity', () => {
@@ -87,5 +97,33 @@ describe('status — time formatting', () => {
     expect(formatReset(realNow - 1000)).toBe('reset due')
     // 500ms margin: floor() makes a plain +5m flaky when the test itself takes >0ms
     expect(formatReset(realNow + 5 * 60_000 + 500)).toBe('resets in 5m')
+  })
+})
+
+describe('status — extension lifecycle labels', () => {
+  it('uses operator-facing Chinese labels for the three dimensions', () => {
+    expect(installState('installed')).toEqual({ label: '已安装', severity: 'ok' })
+    expect(installState('failed')).toEqual({ label: '安装或启动失败', severity: 'error' })
+    expect(runtimeState('running')).toEqual({ label: '运行中', severity: 'ok' })
+    expect(runtimeState('unreachable')).toEqual({ label: '无法连接', severity: 'error' })
+    expect(healthState('degraded')).toEqual({ label: '部分异常', severity: 'warn' })
+  })
+
+  it('degrades unknown values to 未知 instead of leaking raw state tokens', () => {
+    expect(installState('conformance_pending_v9')).toEqual({ label: '未知', severity: 'neutral' })
+    expect(runtimeState(undefined)).toEqual({ label: '未知', severity: 'neutral' })
+    expect(healthState(null)).toEqual({ label: '未知', severity: 'neutral' })
+  })
+
+  it('derives the primary next action from the three states', () => {
+    expect(
+      extensionNextAction({ installState: 'stopped', runtimeState: 'stopped', providersRegistered: false }),
+    ).toBe('start')
+    expect(
+      extensionNextAction({ installState: 'installed', runtimeState: 'running', providersRegistered: false }),
+    ).toBe('reload')
+    expect(
+      extensionNextAction({ installState: 'installed', runtimeState: 'running', providersRegistered: true }),
+    ).toBe('none')
   })
 })

@@ -60,6 +60,9 @@ describe('manager m0: lock / stopped / providerIds', () => {
     // occupy the lock with a long-running stop via a runtime we control
     const rec = manager.get('fake')!
     expect(rec.providerIds).toEqual(['echo'])
+    // display metadata comes from the stashed manifest, not the DB row
+    expect(rec.displayName).toBe('Fake Echo Extension')
+    expect(manager.list()[0]).toMatchObject({ displayName: 'Fake Echo Extension' })
 
     // upgrade while an install-shaped lock is held → busy error
     const release = (manager as unknown as { acquire: (id: string, verb: string) => () => void })
@@ -314,6 +317,7 @@ const rec = (over: Partial<Record<string, unknown>> = {}): Record<string, unknow
   extensionId: 'fake', version: '1.0.0', imageRepo: 'local/gateway-extension-fake',
   imageTag: '1.0.0', imageDigest: null, endpointUrl: 'http://gw-ext-fake:8080',
   status: 'installed', providerIds: ['echo'], error: null,
+  displayName: 'Fake Echo Extension', description: 'Test extension',
   installedAt: 1, updatedAt: 2, ...over,
 })
 
@@ -327,9 +331,17 @@ describe('extension service m0', () => {
     })
     const list = await svc.list()
     expect(list[0]).toMatchObject({
+      name: 'Fake Echo Extension', description: 'Test extension',
       installState: 'installed', runtimeState: 'running', healthState: 'healthy',
       providers: ['echo'], providersRegistered: false, // registry empty in this test
     })
+  })
+
+  it('falls back to the extension id when display metadata is absent', async () => {
+    const svc = serviceWith(async () =>
+      ok({ extensions: [rec({ displayName: undefined, description: undefined })] }))
+    const list = await svc.list()
+    expect(list[0]).toMatchObject({ name: 'fake', description: null })
   })
 
   it('stopped install state → runtime stopped without probing', async () => {

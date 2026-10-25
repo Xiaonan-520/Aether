@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getStoredToken, storeToken, ApiError } from './api'
+import {
+  getStoredToken,
+  storeToken,
+  ApiError,
+  normalizeExtensionRecord,
+  extensionsApi,
+} from './api'
 
 describe('api — admin token storage', () => {
   afterEach(() => {
@@ -128,5 +134,92 @@ describe('api — key lifecycle client', () => {
     const { api } = await import('./api')
     expect(await api.revokeKey('k1')).toMatchObject({ ok: true })
     expect(fetchMock).toHaveBeenCalledWith('/api/keys/k1', expect.objectContaining({ method: 'DELETE' }))
+  })
+})
+
+describe('api — extension payload normalization', () => {
+  const full = {
+    extensionId: 'workbuddycn',
+    name: 'workbuddycn',
+    version: '1.0.9',
+    image: { repo: 'local/gateway-extension-workbuddycn', tag: '1.0.9', digest: 'sha256:abc' },
+    installState: 'installed',
+    runtimeState: 'running',
+    healthState: 'healthy',
+    providers: ['workbuddy-cn'],
+    providersRegistered: true,
+    lastError: null,
+    installedAt: 1_700_000_000_000,
+    updatedAt: 1_700_000_000_000,
+  }
+
+  it('accepts a complete record unchanged', () => {
+    expect(normalizeExtensionRecord(full)).toMatchObject({
+      extensionId: 'workbuddycn',
+      providers: ['workbuddy-cn'],
+      complete: true,
+    })
+  })
+
+  it('fills missing fields with explicit unknowns instead of throwing', () => {
+    const view = normalizeExtensionRecord({ extensionId: 'sparse', installState: 'installed' })
+    expect(view).not.toBeNull()
+    expect(view!.version).toBeNull()
+    expect(view!.image).toEqual({ repo: null, tag: null, digest: null })
+    expect(view!.providers).toEqual([])
+    expect(view!.installedAt).toBeNull()
+    expect(view!.complete).toBe(false)
+  })
+
+  it('drops non-string providers and non-numeric timestamps', () => {
+    const view = normalizeExtensionRecord({
+      ...full,
+      providers: ['ok', 7, null, ''],
+      installedAt: 'yesterday',
+    })
+    expect(view!.providers).toEqual(['ok'])
+    expect(view!.installedAt).toBeNull()
+    expect(view!.complete).toBe(false)
+  })
+
+  it('uses the route id when the payload omits extensionId', () => {
+    expect(normalizeExtensionRecord({ version: '1.0.0' }, 'from-route')!.extensionId).toBe('from-route')
+    expect(normalizeExtensionRecord({ version: '1.0.0' })).toBeNull()
+  })
+
+  it('rejects an extension list body that is not an array', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify({ extensions: 'nope' }), { status: 200 }))),
+    )
+    await expect(extensionsApi.list()).rejects.toMatchObject({
+      status: 502,
+      message: '扩展列表返回的数据格式不正确',
+    } satisfies Partial<ApiError>)
+    vi.unstubAllGlobals()
+  })
+
+  it('normalizes list entries and drops records without an id', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              extensions: [
+                { extensionId: 'good', version: '1.0.0', image: {}, providers: [] },
+                { version: 'orphan' },
+              ],
+            }),
+            { status: 200 },
+          ),
+        ),
+      ),
+    )
+    const body = await extensionsApi.list()
+    expect(body.extensions).toHaveLength(1)
+    expect(body.skipped).toBe(1)
+    expect(body.extensions[0]).toMatchObject({ extensionId: 'good', complete: false })
+    vi.unstubAllGlobals()
   })
 })
