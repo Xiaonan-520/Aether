@@ -163,6 +163,37 @@ describe('http — /v1/chat/completions', () => {
     expect(parsed[1].choices[0].finish_reason).toBe('stop')
   })
 
+  it('streaming: first-chunk failure fails over before SSE is committed', async () => {
+    const { app, store } = setup([
+      { type: 'error', error: new UpstreamError({ kind: 'RATE_LIMIT', message: '429' }) },
+      { type: 'chunks', chunks: [{ text: 'from b', finishReason: 'stop' }] },
+    ])
+    const res = await app.request('/v1/chat/completions', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ model: 'mock-model', messages: [{ role: 'user', content: 'hi' }], stream: true }),
+    })
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('text/event-stream')
+    const text = await res.text()
+    expect(text).toContain('from b')
+    expect(store.getAccount('mock-a1')?.account.status).toBe('rate_limited')
+  })
+
+  it('streaming: all accounts failing before the first chunk returns HTTP 429, not SSE', async () => {
+    const { app } = setup([
+      { type: 'error', error: new UpstreamError({ kind: 'RATE_LIMIT', message: '429-a' }) },
+      { type: 'error', error: new UpstreamError({ kind: 'RATE_LIMIT', message: '429-b' }) },
+    ])
+    const res = await app.request('/v1/chat/completions', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ model: 'mock-model', messages: [{ role: 'user', content: 'hi' }], stream: true }),
+    })
+    expect(res.status).toBe(429)
+    expect(res.headers.get('content-type') ?? '').not.toContain('text/event-stream')
+  })
+
   it('failover across accounts inside one request (429 then success)', async () => {
     const { app, store } = setup([
       { type: 'error', error: new UpstreamError({ kind: 'RATE_LIMIT', message: '429', detail: 'model:mock-model' }) },

@@ -234,7 +234,9 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
         }
       },
       cancel() {
-        // client disconnected; provider stream cleanup happens via its own finally
+        // Client disconnected before/while consuming: close the wrapped
+        // generator so the prefetched iterator and provider stream are released.
+        void outcome.stream.return(undefined).catch(() => {})
       },
     })
     return new Response(sse, {

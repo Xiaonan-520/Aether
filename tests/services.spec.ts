@@ -240,6 +240,132 @@ describe('chat service — failover', () => {
       expect(parts.join('')).toBe('partialmore')
     }
     expect(h.ctx.store.getAccount('mock-a1')?.account.lastError).toBe('connection reset')
+    expect(h.provider.chatCalls.map((call) => call.accountId)).toEqual(['mock-a1'])
+  })
+})
+
+describe('chat service — streaming prefetch failover', () => {
+  const streamReq = { ...chatReq, stream: true }
+
+  it('fails over when the first iterator.next() rejects before any chunk', async () => {
+    const h = setup({
+      chatScript: [
+        { type: 'error', error: new UpstreamError({ kind: 'RATE_LIMIT', message: '429' }) },
+        { type: 'chunks', chunks: [{ text: 'from b', finishReason: 'stop' }] },
+      ],
+    })
+    const outcome = await h.chat.handle(streamReq)
+    expect(outcome.kind).toBe('stream')
+    if (outcome.kind !== 'stream') return
+    const parts: string[] = []
+    for await (const chunk of outcome.stream) parts.push(chunk.text)
+    expect(parts.join('')).toBe('from b')
+    expect(h.provider.chatCalls.map((call) => call.accountId)).toEqual(['mock-a1', 'mock-a2'])
+    expect(h.ctx.store.getAccount('mock-a1')?.account.status).toBe('rate_limited')
+  })
+
+  it('does not fail over on TERMINAL before the first chunk', async () => {
+    const h = setup({
+      chatScript: [
+        { type: 'error', error: new UpstreamError({ kind: 'TERMINAL', message: 'bad request' }) },
+        { type: 'chunks', chunks: [{ text: 'must not run', finishReason: 'stop' }] },
+      ],
+    })
+    await expect(h.chat.handle(streamReq)).rejects.toMatchObject({ status: 400 })
+    expect(h.provider.chatCalls.map((call) => call.accountId)).toEqual(['mock-a1'])
+  })
+
+  it('fails over when the provider reports TIMEOUT before the first chunk', async () => {
+    const h = setup({
+      chatScript: [
+        { type: 'error', error: new UpstreamError({ kind: 'TIMEOUT', message: 'first token timed out' }) },
+        { type: 'chunks', chunks: [{ text: 'from b', finishReason: 'stop' }] },
+      ],
+    })
+    const outcome = await h.chat.handle(streamReq)
+    expect(outcome.kind).toBe('stream')
+    if (outcome.kind !== 'stream') return
+    const parts: string[] = []
+    for await (const chunk of outcome.stream) parts.push(chunk.text)
+    expect(parts.join('')).toBe('from b')
+    expect(h.provider.chatCalls.map((call) => call.accountId)).toEqual(['mock-a1', 'mock-a2'])
+  })
+
+  it('treats an empty provider stream as a completed empty stream', async () => {
+    const h = setup({ chatScript: [{ type: 'chunks', chunks: [] }] })
+    const outcome = await h.chat.handle(streamReq)
+    expect(outcome.kind).toBe('stream')
+    if (outcome.kind !== 'stream') return
+    const parts: string[] = []
+    for await (const chunk of outcome.stream) parts.push(chunk.text)
+    expect(parts).toEqual([])
+    expect(h.provider.chatCalls).toHaveLength(1)
+  })
+
+  it('refreshes once and retries the same account before the first chunk', async () => {
+    let refreshes = 0
+    const h = setup({
+      accounts: [account('mock', 'mock-a1')],
+      chatScript: [
+        { type: 'error', error: new UpstreamError({ kind: 'AUTH_INVALID', message: '401' }) },
+        { type: 'chunks', chunks: [{ text: 'after refresh', finishReason: 'stop' }] },
+      ],
+    })
+    h.provider.refreshFn = async () => {
+      refreshes += 1
+      return { refreshable: true, expiresAt: Date.now() + 1_000, refreshed: true }
+    }
+    const outcome = await h.chat.handle(streamReq)
+    expect(outcome.kind).toBe('stream')
+    if (outcome.kind !== 'stream') return
+    const parts: string[] = []
+    for await (const chunk of outcome.stream) parts.push(chunk.text)
+    expect(parts.join('')).toBe('after refresh')
+    expect(refreshes).toBe(1)
+    expect(h.provider.chatCalls.map((call) => call.accountId)).toEqual(['mock-a1', 'mock-a1'])
+  })
+
+  it('closes the provider iterator when the consumer stops after the first chunk', async () => {
+    const h = setup({ accounts: [account('mock', 'mock-a1')], chatScript: [] })
+    let cleaned = 0
+    h.provider.chat.stream = async function* (_ctx, req, acc) {
+      h.provider.chatCalls.push({ req, accountId: acc.id })
+      try {
+        yield { text: 'first' }
+        await new Promise<void>(() => {})
+      } finally {
+        cleaned += 1
+      }
+    }
+
+    const outcome = await h.chat.handle(streamReq)
+    expect(outcome.kind).toBe('stream')
+    if (outcome.kind !== 'stream') return
+    for await (const chunk of outcome.stream) {
+      expect(chunk.text).toBe('first')
+      break
+    }
+    expect(cleaned).toBe(1)
+  })
+
+  it('tries each eligible account at most once and respects the attempt limit', async () => {
+    const h = setup({
+      accounts: [
+        account('mock', 'mock-a1'),
+        account('mock', 'mock-a2'),
+        account('mock', 'mock-a3'),
+        account('mock', 'mock-a4'),
+      ],
+      chatScript: [
+        { type: 'error', error: new UpstreamError({ kind: 'RATE_LIMIT', message: '429-1' }) },
+        { type: 'error', error: new UpstreamError({ kind: 'RATE_LIMIT', message: '429-2' }) },
+        { type: 'error', error: new UpstreamError({ kind: 'RATE_LIMIT', message: '429-3' }) },
+        { type: 'error', error: new UpstreamError({ kind: 'RATE_LIMIT', message: '429-4' }) },
+      ],
+    })
+    await expect(h.chat.handle(streamReq)).rejects.toMatchObject({ status: 429 })
+    expect(h.provider.chatCalls).toHaveLength(3)
+    expect(new Set(h.provider.chatCalls.map((call) => call.accountId)).size).toBe(3)
   })
 })
 
