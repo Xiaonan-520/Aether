@@ -8,7 +8,8 @@ import { motion } from 'motion/react'
 import { toast } from 'sonner'
 import { api, ApiError, type ConsoleProvider } from '@/lib/api'
 import { useQuery } from '@/lib/use-query'
-import { formatTime, rollUpAccounts, formatQuota, formatReset } from '@/lib/status'
+import { formatTime, rollUpAccounts, formatReset } from '@/lib/status'
+import { summarizeQuotas, type QuotaSummary } from '@/lib/quota-display'
 import { StatusBadge, StatusDot, DataPoint } from '@/components/console/status'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -254,7 +255,7 @@ function ProviderCard({
   reduced: boolean
 }) {
   const roll = rollUpAccounts(provider.accounts)
-  const primaryQuota = pickPrimaryQuota(provider)
+  const quotaSummary = summarizeQuotas(provider.quotas)
   const claim = provider.claim
   const claimSupported = provider.capabilities.supportsCredits === true
 
@@ -297,24 +298,10 @@ function ProviderCard({
 
           <div className="col-span-3 flex min-w-0 flex-col gap-0.5">
             <span className="text-xs text-muted-foreground">Credits / quota</span>
-            {primaryQuota === null ? (
-              <span className="text-sm text-muted-foreground">
-                {provider.capabilities.supportsQuota
-                  ? 'No quota data yet'
-                  : 'Not supported by this provider'}
-              </span>
-            ) : (
-              <span className="flex flex-wrap items-baseline gap-x-2 text-sm">
-                <span className={`nums font-medium ${primaryQuota.unknown ? 'text-muted-foreground' : ''}`}>
-                  {primaryQuota.value}
-                </span>
-                {primaryQuota.unknown ? null : (
-                  <span className="text-xs text-muted-foreground">
-                    {formatReset(primaryQuota.resetAt)} · {formatTime(primaryQuota.lastUpdatedAt)}
-                  </span>
-                )}
-              </span>
-            )}
+            <QuotaSummaryLine
+              summary={quotaSummary}
+              supportsQuota={provider.capabilities.supportsQuota}
+            />
           </div>
 
           <div className="col-span-3 flex min-w-0 flex-col gap-0.5">
@@ -359,27 +346,92 @@ function ProviderCard({
 }
 
 /**
- * The card shows one quota line: prefer a usable numeric snapshot, keep
- * unknown values visually distinct, and never fake a zero.
+ * Compact provider-card quota summary. A single account keeps the original
+ * one-line shape. Multiple accounts are summed only when their resource and
+ * unit are comparable; unknown accounts are counted, never coerced to zero.
  */
-function pickPrimaryQuota(provider: ConsoleProvider) {
-  const usable = provider.quotas.find(
-    (q) => q.known && (q.remaining !== null || q.total !== null),
+function QuotaSummaryLine({
+  summary,
+  supportsQuota,
+}: {
+  summary: QuotaSummary
+  supportsQuota: boolean
+}) {
+  if (summary.kind === 'none') {
+    return (
+      <span className="text-sm text-muted-foreground">
+        {supportsQuota ? 'No quota data yet' : 'Not supported by this provider'}
+      </span>
+    )
+  }
+
+  if (summary.kind === 'single') {
+    return (
+      <span className="flex flex-wrap items-baseline gap-x-2 text-sm">
+        <span className={`nums font-medium ${summary.unknown ? 'text-muted-foreground' : ''}`}>
+          {summary.value}
+        </span>
+        {summary.unknown ? null : (
+          <span className="text-xs text-muted-foreground">
+            {formatReset(summary.resetAt)} · {formatTime(summary.lastUpdatedAt)}
+          </span>
+        )}
+      </span>
+    )
+  }
+
+  if (summary.kind === 'aggregate') {
+    return (
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className="flex flex-wrap items-baseline gap-x-2 text-sm">
+          <span className="nums font-medium">{summary.value}</span>
+          {summary.unit ? <span className="text-xs text-muted-foreground">{summary.unit}</span> : null}
+          <span className="text-xs text-muted-foreground">
+            {summary.accountCount} accounts
+          </span>
+        </span>
+        <span className="text-xs text-muted-foreground">
+          latest update {formatTime(summary.lastUpdatedAt)}
+          {summary.resetAt ? ` · ${formatReset(summary.resetAt)}` : ''}
+        </span>
+        {summary.unknownCount > 0 ? (
+          <span className="text-xs text-warning">
+            {summary.unknownCount} unknown {summary.unknownCount === 1 ? 'account' : 'accounts'} —
+            total covers known accounts only
+          </span>
+        ) : null}
+      </div>
+    )
+  }
+
+  if (summary.kind === 'unavailable') {
+    return (
+      <span className="text-sm text-muted-foreground">
+        Quota unknown for {summary.accountCount}{' '}
+        {summary.accountCount === 1 ? 'account' : 'accounts'}
+      </span>
+    )
+  }
+
+  return (
+    <div className="flex min-w-0 flex-col gap-0.5">
+      <span className="text-xs text-muted-foreground">
+        {summary.accountCount} accounts · per-account quotas
+      </span>
+      {summary.items.map((item) => (
+        <span
+          key={item.accountId}
+          className="flex min-w-0 items-baseline justify-between gap-3 text-sm"
+        >
+          <span className="truncate text-muted-foreground">{item.label}</span>
+          <span className={`nums shrink-0 ${item.unknown ? 'text-muted-foreground' : ''}`}>
+            {item.value}
+            {item.unit ? ` ${item.unit}` : ''}
+          </span>
+        </span>
+      ))}
+    </div>
   )
-  if (usable) {
-    const { value, unknown } = formatQuota(usable.remaining, usable.total)
-    return { value, unknown, resetAt: usable.resetAt, lastUpdatedAt: usable.lastUpdatedAt }
-  }
-  const anySnapshot = provider.quotas.find((q) => q.lastUpdatedAt !== null)
-  if (anySnapshot) {
-    return {
-      value: 'Snapshot without numeric quota',
-      unknown: true,
-      resetAt: null,
-      lastUpdatedAt: anySnapshot.lastUpdatedAt,
-    }
-  }
-  return null
 }
 
 function OverviewSkeleton() {

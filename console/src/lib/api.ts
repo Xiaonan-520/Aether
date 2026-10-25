@@ -347,6 +347,10 @@ export const api = {
   providerClaims: (id: string) =>
     request<{ claims: ClaimJob[] }>(`/api/console/providers/${encodeURIComponent(id)}/claims`),
 
+  /** Per-account quota snapshots for one provider (accountId is the join key). */
+  providerQuotas: (id: string) =>
+    request<{ quotas: QuotaResource[] }>(`/api/console/providers/${encodeURIComponent(id)}/quotas`),
+
   accounts: (provider?: string) =>
     request<{ accounts: Account[] }>(
       `/api/accounts${provider ? `?provider=${encodeURIComponent(provider)}` : ''}`,
@@ -377,6 +381,10 @@ export const api = {
     request<{ jobId: string }>(`/api/accounts/${encodeURIComponent(accountId)}/${jobType}`, {
       method: 'POST',
     }),
+
+  /** Read-only scheduler job list; used to follow one manual sync to completion. */
+  jobs: (type?: string) =>
+    request<{ jobs: ClaimJob[] }>(`/api/jobs${type ? `?type=${encodeURIComponent(type)}` : ''}`),
 
   // -- gateway API keys (POST /api/keys family) ------------------------------
 
