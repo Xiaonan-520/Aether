@@ -379,6 +379,12 @@ export class ExtensionManager {
       handle = await this.runtime.createContainer(spec)
       await this.runtime.start(handle.containerId)
 
+      // Node + tsx take a few seconds to boot; a single immediate fetch loses
+      // that race (observed on a real deployment: "fetch failed" after ~9s).
+      // waitHealthy polls until the container answers, then /manifest is a
+      // single reliable call.
+      await this.waitHealthy(handle.endpointUrl, probeToken)
+
       const manifest = await this.withTimeout(
         this.fetchServedManifest(handle.endpointUrl, probeToken),
         30_000,
