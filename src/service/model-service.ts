@@ -40,7 +40,10 @@ export class ModelService {
     for (const entry of entries) {
       if (!entry.enabled) continue
       if (!entry.modelId.includes('::') && canonical.has(`${entry.provider}::${entry.upstreamModel}`)) continue
-      const hasAccount = this.providerHasUsableAccount(entry.provider)
+      // Availability must match the same account-level filter the router uses:
+      // a provider with accounts that cannot serve THIS model is not "available"
+      // for it.
+      const hasAccount = this.providerHasUsableAccount(entry.provider, entry.upstreamModel)
       const id = entry.modelId
       const existing = seen.get(id)
       if (existing && existing.available) continue // a better route already wins
@@ -75,12 +78,19 @@ export class ModelService {
     return resolution.entry
   }
 
-  private providerHasUsableAccount(provider: string): boolean {
+  private providerHasUsableAccount(provider: string, model?: string): boolean {
     // same predicate the pool selects with, so a routable account is never
-    // hidden from /v1/models (e.g. rate_limited past its cooldown)
+    // hidden from /v1/models (e.g. rate_limited past its cooldown) and an
+    // account that declares a different model catalog is not advertised for
+    // a model it cannot serve
     const now = this.ctx.now()
     return this.ctx.store
       .listAccounts(provider)
-      .some((s) => s.account.enabled && AccountPool.isSelectable(s.account, now))
+      .some(
+        (s) =>
+          s.account.enabled &&
+          AccountPool.isSelectable(s.account, now) &&
+          (model === undefined || AccountPool.supportsModel(s.account, model)),
+      )
   }
 }

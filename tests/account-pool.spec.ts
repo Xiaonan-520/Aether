@@ -136,6 +136,50 @@ describe('account pool — selection', () => {
     expect((await h.select('codearts'))?.account.id).toBe('healthy')
   })
 
+  it('skips an account that declares a different model catalog', async () => {
+    const h = new Harness(
+      makeAccount({ id: 'a1', providerMetadataJson: '{"models":["m2"]}' }),
+      makeAccount({ id: 'a2', providerMetadataJson: '{"models":["m1","m2"]}' }),
+    )
+    expect((await h.select('codearts', 'm1'))?.account.id).toBe('a2')
+  })
+
+  it('treats accounts without a declared catalog as eligible (unknown is not a denial)', async () => {
+    const h = new Harness(
+      makeAccount({ id: 'unknown' }),
+      makeAccount({ id: 'declared-other', providerMetadataJson: '{"models":["m2"]}' }),
+    )
+    expect((await h.select('codearts', 'm1'))?.account.id).toBe('unknown')
+  })
+
+  it('skips every account when all declared catalogs exclude the model', async () => {
+    const h = new Harness(
+      makeAccount({ id: 'a1', providerMetadataJson: '{"models":["m2"]}' }),
+      makeAccount({ id: 'a2', providerMetadataJson: '{"models":["m3"]}' }),
+    )
+    expect(await h.select('codearts', 'm1')).toBeNull()
+  })
+
+  it('accepts a namespaced catalog entry for the requested upstream model', async () => {
+    const h = new Harness(
+      makeAccount({ id: 'a1', providerMetadataJson: '{"models":["other"]}' }),
+      makeAccount({ id: 'a2', providerMetadataJson: '{"models":["workbuddycn::m1"]}' }),
+    )
+    expect((await h.select('codearts', 'm1'))?.account.id).toBe('a2')
+  })
+
+  it('does not apply model capability filtering when no model is requested', async () => {
+    const h = new Harness(
+      makeAccount({ id: 'declared-empty', providerMetadataJson: '{"models":[]}' }),
+    )
+    expect((await h.select('codearts'))?.account.id).toBe('declared-empty')
+  })
+
+  it('keeps accounts eligible when provider metadata is unparsable', async () => {
+    const h = new Harness(makeAccount({ id: 'broken', providerMetadataJson: '{not json' }))
+    expect((await h.select('codearts', 'm1'))?.account.id).toBe('broken')
+  })
+
   it('keeps healthy_low_quota in the healthy tier', async () => {
     const h = new Harness(
       makeAccount({
