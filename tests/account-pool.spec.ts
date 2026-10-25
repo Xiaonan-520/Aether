@@ -263,6 +263,88 @@ describe('account pool — selection', () => {
   })
 })
 
+describe('account pool — in-flight lease', () => {
+  it('spreads concurrent selections across accounts instead of repeating the LRU winner', async () => {
+    const h = new Harness(
+      makeAccount({ id: 'a1', lastSuccessAt: 100_000 }),
+      makeAccount({ id: 'a2', lastSuccessAt: 200_000 }),
+    )
+    const first = await h.select('codearts')
+    expect(first?.account.id).toBe('a1')
+    expect(h.pool.inflightCount('a1')).toBe(1)
+
+    // a2 has a newer lastSuccessAt, so without the in-flight term it would lose
+    // to a1 again; the lease pushes the second concurrent request to a2.
+    const second = await h.select('codearts')
+    expect(second?.account.id).toBe('a2')
+
+    first?.release()
+    second?.release()
+    expect(h.pool.inflightCount('a1')).toBe(0)
+    expect(h.pool.inflightCount('a2')).toBe(0)
+    // with both released, LRU ordering is restored
+    expect((await h.select('codearts'))?.account.id).toBe('a1')
+  })
+
+  it('falls back to an already-busy account when no idle account can serve', async () => {
+    const h = new Harness(makeAccount({ id: 'only' }))
+    const first = await h.select('codearts')
+    const second = await h.select('codearts')
+    expect(first?.account.id).toBe('only')
+    expect(second?.account.id).toBe('only')
+    expect(h.pool.inflightCount('only')).toBe(2)
+    first?.release()
+    second?.release()
+    expect(h.pool.inflightCount('only')).toBe(0)
+  })
+
+  it('release is idempotent and never produces a negative slot count', async () => {
+    const h = new Harness(makeAccount({ id: 'a1' }))
+    const picked = await h.select('codearts')
+    picked?.release()
+    picked?.release()
+    expect(h.pool.inflightCount('a1')).toBe(0)
+  })
+
+  it('sweeps a leaked lease after its TTL so capacity is not lost', async () => {
+    const h = new Harness(makeAccount({ id: 'a1', lastSuccessAt: 100_000 }))
+    h.pool = new AccountPool({
+      listAccounts: (provider) => [...h.accounts.values()].filter((a) => a.provider === provider),
+      patchAccount: (id, patch) => {
+        const current = h.accounts.get(id)
+        if (current) h.accounts.set(id, { ...current, ...patch })
+      },
+      hasCredential: () => true,
+      now: () => h.now,
+      leaseTtlMs: 60_000,
+    })
+    const leaked = await h.select('codearts') // a1, never released
+    expect(leaked?.account.id).toBe('a1')
+    expect(h.pool.inflightCount('a1')).toBe(1)
+
+    h.tick(61_000)
+    // the sweep runs on the next acquire and drops the abandoned slot
+    const next = await h.select('codearts')
+    expect(next?.account.id).toBe('a1')
+    expect(h.pool.inflightCount('a1')).toBe(1) // only the fresh lease remains
+    next?.release()
+    expect(h.pool.inflightCount('a1')).toBe(0)
+  })
+
+  it('does not let a lease override an explicit priority', async () => {
+    const h = new Harness(
+      makeAccount({ id: 'low', providerMetadataJson: '{"priority":1}' }),
+      makeAccount({ id: 'high', providerMetadataJson: '{"priority":5}' }),
+    )
+    const first = await h.select('codearts')
+    expect(first?.account.id).toBe('high')
+    const second = await h.select('codearts')
+    expect(second?.account.id).toBe('high')
+    first?.release()
+    second?.release()
+  })
+})
+
 describe('account pool — token refresh during selection', () => {
   it('refreshes expired refreshable tokens inline (single flight)', async () => {
     const h = new Harness(

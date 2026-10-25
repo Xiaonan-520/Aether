@@ -17,6 +17,8 @@ const FAILURE_COOLDOWN_BASE_MS = 60_000
 const FAILURE_COOLDOWN_MAX_MS = 30 * 60_000
 /** Default per-model rate-limit window when upstream gives no retry-after. */
 const DEFAULT_RATE_LIMIT_MS = 60_000
+/** How long one request may hold an in-flight slot before it is swept. */
+const DEFAULT_LEASE_TTL_MS = 10 * 60_000
 /**
  * Statuses that mean the account is healthy now. `healthy_low_quota` is still
  * routable and must stay in this tier; all other selectable statuses are
@@ -33,6 +35,8 @@ export interface SelectOptions {
 
 export interface SelectedAccount {
   account: Account
+  /** release the in-flight slot taken for this selection */
+  release: () => void
 }
 
 export interface PoolDeps {
@@ -52,13 +56,77 @@ export interface PoolDeps {
   refreshAccount?: (account: Account) => Promise<Account>
   /** monotonic-ish clock injection for tests */
   now?: () => number
+  /** in-flight lease TTL (default 10 minutes) */
+  leaseTtlMs?: number
 }
 
 export class AccountPool {
+  /**
+   * In-flight requests per account. Purely in-memory coordination: it spreads
+   * concurrent requests across accounts and is released the moment a request
+   * finishes, fails or is cancelled. It is NOT a quota reservation and is never
+   * persisted, so a crashed process cannot leave an account stuck.
+   */
+  private readonly inflight = new Map<string, number>()
+  private readonly leaseStartedAt = new Map<string, number[]>()
+
   constructor(private readonly deps: PoolDeps) {}
 
   private now(): number {
     return this.deps.now?.() ?? Date.now()
+  }
+
+  /** Current in-flight count for an account (diagnostics / tests). */
+  inflightCount(accountId: string): number {
+    return this.inflight.get(accountId) ?? 0
+  }
+
+  /**
+   * Take an in-flight slot for an account. Must be paired with release().
+   * Expired slots (a leaked lease from an abandoned request) are swept first so
+   * a bug in a caller cannot permanently reduce capacity.
+   */
+  acquire(accountId: string): void {
+    this.sweepExpiredLeases()
+    this.inflight.set(accountId, (this.inflight.get(accountId) ?? 0) + 1)
+    const started = this.leaseStartedAt.get(accountId) ?? []
+    started.push(this.now())
+    this.leaseStartedAt.set(accountId, started)
+  }
+
+  /** Release an in-flight slot; safe to call once per acquire(). */
+  release(accountId: string): void {
+    const count = this.inflight.get(accountId) ?? 0
+    if (count <= 1) this.inflight.delete(accountId)
+    else this.inflight.set(accountId, count - 1)
+    const started = this.leaseStartedAt.get(accountId)
+    if (started && started.length > 0) {
+      started.shift()
+      if (started.length === 0) this.leaseStartedAt.delete(accountId)
+    }
+  }
+
+  /** Drop leases older than the lease TTL (a request that never released). */
+  private sweepExpiredLeases(): void {
+    const cutoff = this.now() - this.leaseTtlMs()
+    for (const [accountId, started] of this.leaseStartedAt) {
+      const live = started.filter((at) => at > cutoff)
+      const dropped = started.length - live.length
+      if (dropped === 0) continue
+      if (live.length === 0) {
+        this.leaseStartedAt.delete(accountId)
+        this.inflight.delete(accountId)
+        continue
+      }
+      this.leaseStartedAt.set(accountId, live)
+      const remaining = (this.inflight.get(accountId) ?? 0) - dropped
+      if (remaining > 0) this.inflight.set(accountId, remaining)
+      else this.inflight.delete(accountId)
+    }
+  }
+
+  private leaseTtlMs(): number {
+    return this.deps.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS
   }
 
   /**
@@ -90,11 +158,17 @@ export class AccountPool {
     const healthy = candidates.filter((a) => HEALTHY_STATUSES.has(a.status))
     const pool = healthy.length > 0 ? healthy : candidates
 
-    // manual priority (provider metadata `priority`), then least-recently-used
+    // manual priority (provider metadata `priority`), then fewest in-flight
+    // requests, then least-recently-used. The in-flight term spreads concurrent
+    // requests that would otherwise all pick the same LRU winner; it never
+    // overrides an explicit priority.
     pool.sort((a, b) => {
       const pa = priorityOf(a)
       const pb = priorityOf(b)
       if (pa !== pb) return pb - pa
+      const ia = this.inflightCount(a.id)
+      const ib = this.inflightCount(b.id)
+      if (ia !== ib) return ia - ib
       return (a.lastSuccessAt ?? 0) - (b.lastSuccessAt ?? 0)
     })
 
@@ -102,7 +176,7 @@ export class AccountPool {
       if (this.isTokenExpired(candidate, now) && candidate.refreshable) {
         try {
           const refreshed = await this.deps.refreshAccount?.(candidate)
-          if (refreshed) return { account: refreshed }
+          if (refreshed) return this.lease(refreshed)
         } catch {
           // refresh failed: mark and try the next candidate
           this.deps.patchAccount(candidate.id, {
@@ -113,9 +187,24 @@ export class AccountPool {
           continue
         }
       }
-      return { account: candidate }
+      return this.lease(candidate)
     }
     return null
+  }
+
+  /** Take an in-flight slot and hand back its release function. */
+  private lease(account: Account): SelectedAccount {
+    this.acquire(account.id)
+    let released = false
+    return {
+      account,
+      release: () => {
+        // idempotent: a double release would hand out a phantom slot
+        if (released) return
+        released = true
+        this.release(account.id)
+      },
+    }
   }
 
   private isTokenExpired(account: Account, now: number): boolean {
