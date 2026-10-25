@@ -227,6 +227,33 @@ describe('http — /v1/chat/completions', () => {
     expect(res.status).toBe(404)
   })
 
+  it('503 (not 404) when the model exists but every account is unavailable', async () => {
+    const { app, store } = setup()
+    store.patchAccount('mock-a1', { status: 'rate_limited', cooldownUntil: Date.now() + 60_000 })
+    store.patchAccount('mock-a2', { status: 'quota_exhausted' })
+    const res = await app.request('/v1/chat/completions', {
+      method: 'POST', headers,
+      body: JSON.stringify({ model: 'mock-model', messages: [{ role: 'user', content: 'hi' }] }),
+    })
+    expect(res.status).toBe(503)
+    const body = await res.json()
+    expect(body.error.type).toBe('upstream_error')
+    expect(body.error.message).toContain('no available account')
+    expect(body.error.message).not.toContain('not found')
+  })
+
+  it('503 (not 404) when every account for the model is disabled', async () => {
+    const { app, store } = setup()
+    store.patchAccount('mock-a1', { enabled: false, status: 'disabled' })
+    store.patchAccount('mock-a2', { enabled: false, status: 'disabled' })
+    const res = await app.request('/v1/chat/completions', {
+      method: 'POST', headers,
+      body: JSON.stringify({ model: 'mock-model', messages: [{ role: 'user', content: 'hi' }] }),
+    })
+    expect(res.status).toBe(503)
+    expect((await res.json()).error.message).toContain('all accounts disabled')
+  })
+
   it('503 with OpenAI error body when no account is available', async () => {
     const { app, store } = setup([
       { type: 'error', error: new UpstreamError({ kind: 'NEEDS_CAPTCHA', message: 'captcha needed' }) },

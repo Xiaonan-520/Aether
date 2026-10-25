@@ -139,7 +139,7 @@ export class ChatService {
       (provider) => this.providerHasUsableAccount(provider),
     )
     if (!resolution) {
-      throw new OpenAIApiError(404, 'invalid_request_error', `model "${req.model}" not found`)
+      throw this.noRouteError(req.model)
     }
     const { entry, provider } = resolution
     let adapter = this.ctx.registry.get(provider)
@@ -321,6 +321,45 @@ export class ChatService {
       this.record(provider, account.id, 'token.refresh_failed', error.message, error)
       return false
     }
+  }
+
+  /**
+   * Distinguish "this model does not exist" from "the model exists but every
+   * account that could serve it is currently unavailable".
+   *
+   * A 404 makes clients believe the model id is wrong and drop it from their
+   * model list; a temporarily cooled/limited/exhausted account set is a
+   * service availability problem. Only a genuinely unknown model stays 404.
+   */
+  private noRouteError(requested: string): OpenAIApiError {
+    const known = this.ctx.router.resolve(requested, false, () => true)
+    if (!known) {
+      return new OpenAIApiError(404, 'invalid_request_error', `model "${requested}" not found`)
+    }
+    const reason = this.unavailableReason(known.provider)
+    return new OpenAIApiError(
+      503,
+      'upstream_error',
+      `no available account for model "${requested}" (${reason})`,
+    )
+  }
+
+  /** Classify why a provider cannot serve right now, without exposing secrets. */
+  private unavailableReason(provider: string): string {
+    const now = this.ctx.now()
+    const accounts = this.ctx.store.listAccounts(provider).map((s) => s.account)
+    if (accounts.length === 0) return 'no accounts configured'
+    const enabled = accounts.filter((a) => a.enabled)
+    if (enabled.length === 0) return 'all accounts disabled'
+    const selectable = enabled.filter((a) => AccountPool.isSelectable(a, now))
+    if (selectable.length === 0) {
+      const cooling = enabled.some(
+        (a) => a.cooldownUntil !== null && a.cooldownUntil > now,
+      )
+      return cooling ? 'accounts cooling down' : 'no selectable account'
+    }
+    const statuses = [...new Set(enabled.map((a) => a.status))].sort()
+    return `account states: ${statuses.join(', ')}`
   }
 
   private providerHasUsableAccount(provider: string): boolean {
