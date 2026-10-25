@@ -22,6 +22,41 @@ import { ExtensionAuthRecovery, resolveExtensionIdForProvider } from '../protoco
 /** How many accounts may be tried for a single client request. */
 const MAX_ACCOUNT_ATTEMPTS = 3
 
+/** Close a provider iterator without masking the original dispatch error. */
+async function closeIterator(iterator: AsyncIterator<ChatChunk>): Promise<void> {
+  try {
+    await iterator.return?.()
+  } catch {
+    // cleanup errors must not replace the error that triggered cleanup
+  }
+}
+
+/**
+ * Re-emit the already-prefetched first chunk, then continue the provider
+ * iterator. The finally block guarantees the provider iterator is closed when
+ * the consumer stops early or a later chunk fails.
+ */
+async function* prependFirstChunk(
+  first: ChatChunk,
+  iterator: AsyncIterator<ChatChunk>,
+): AsyncGenerator<ChatChunk> {
+  try {
+    yield first
+    for (;;) {
+      const next = await iterator.next()
+      if (next.done) return
+      yield next.value
+    }
+  } finally {
+    await closeIterator(iterator)
+  }
+}
+
+async function* emptyChunks(): AsyncGenerator<ChatChunk> {
+  // An empty provider stream is still a successful completion, matching the
+  // pre-prefetch behaviour: report success and send only the SSE [DONE] marker.
+}
+
 export interface ChatOutcome {
   kind: 'result'
   result: ChatResult
@@ -134,9 +169,38 @@ export class ChatService {
         const upstreamReq: ChatRequest = { ...req, model: entry.upstreamModel }
         if (req.stream) {
           const stream = adapter.chat.stream(pctx, upstreamReq, account, req.tools)
+          const iterator = stream[Symbol.asyncIterator]()
+          let first: IteratorResult<ChatChunk>
+          try {
+            // Prefetch before handing the SSE stream to the HTTP layer. Any
+            // failure here can still follow the normal account failover path;
+            // once the first chunk is returned, the stream is committed and
+            // later errors must end the request instead of switching accounts.
+            // Provider adapters own their first-token timeout; a TIMEOUT raised
+            // here is handled by the same retry/exclude rules as non-streaming.
+            first = await iterator.next()
+          } catch (err) {
+            await closeIterator(iterator)
+            throw err
+          }
+          if (first.done) {
+            await closeIterator(iterator)
+            return {
+              kind: 'stream',
+              stream: this.wrappedStream(emptyChunks(), provider, entry.upstreamModel, account),
+              accountId: account.id,
+              provider,
+              upstreamModel: entry.upstreamModel,
+            }
+          }
           return {
             kind: 'stream',
-            stream: this.wrappedStream(stream, provider, entry.upstreamModel, account),
+            stream: this.wrappedStream(
+              prependFirstChunk(first.value, iterator),
+              provider,
+              entry.upstreamModel,
+              account,
+            ),
             accountId: account.id,
             provider,
             upstreamModel: entry.upstreamModel,
