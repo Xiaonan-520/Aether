@@ -152,6 +152,8 @@ export class ChatService {
     let lastError: UpstreamError | undefined
     /** one-shot: a rotated extension token is re-registered at most once per request */
     let extensionAuthRecovered = false
+    /** true once at least one account was selected for this request */
+    let attempted = false
 
     for (let attempt = 0; attempt < MAX_ACCOUNT_ATTEMPTS; attempt++) {
       const selected = await this.ctx.pool.selectAccount(provider, {
@@ -159,6 +161,7 @@ export class ChatService {
         exclude,
       })
       if (!selected) break
+      attempted = true
       const account = selected.account
       // The in-flight slot is held for exactly as long as one attempt uses the
       // account: released here on failure, after a non-streaming result, or by
@@ -280,7 +283,7 @@ export class ChatService {
       }
     }
 
-    throw this.toClientError(lastError)
+    throw this.toClientError(lastError, attempted ? undefined : provider)
   }
 
   /** Wraps a provider stream: reports success/failure, freezes failover. */
@@ -369,12 +372,13 @@ export class ChatService {
     if (accounts.length === 0) return 'no accounts configured'
     const enabled = accounts.filter((a) => a.enabled)
     if (enabled.length === 0) return 'all accounts disabled'
+    // Report the concrete account states first: "cooling down" or "no selectable
+    // account" hides which status actually blocks the request.
     const selectable = enabled.filter((a) => AccountPool.isSelectable(a, now))
     if (selectable.length === 0) {
-      const cooling = enabled.some(
-        (a) => a.cooldownUntil !== null && a.cooldownUntil > now,
-      )
-      return cooling ? 'accounts cooling down' : 'no selectable account'
+      const cooling = enabled.some((a) => a.cooldownUntil !== null && a.cooldownUntil > now)
+      const statuses = [...new Set(enabled.map((a) => a.status))].sort().join(', ')
+      return cooling ? `accounts cooling down (states: ${statuses})` : `no selectable account (states: ${statuses})`
     }
     const statuses = [...new Set(enabled.map((a) => a.status))].sort()
     return `account states: ${statuses.join(', ')}`
@@ -399,9 +403,16 @@ export class ChatService {
     })
   }
 
-  private toClientError(error: UpstreamError | undefined): OpenAIApiError {
+  private toClientError(error: UpstreamError | undefined, emptyProvider?: string): OpenAIApiError {
     if (!error) {
-      return new OpenAIApiError(503, 'upstream_error', 'no available account for this model')
+      // Nothing was attempted. When we know the provider, say why it could not
+      // serve; an empty set of accounts must never look like a bad model id.
+      const reason = emptyProvider ? this.unavailableReason(emptyProvider) : null
+      return new OpenAIApiError(
+        503,
+        'upstream_error',
+        reason ? `no available account (${reason})` : 'no available account for this model',
+      )
     }
     // All-account exhaustion is a service availability problem, not a client
     // mistake: only a true business rejection maps to 400.
