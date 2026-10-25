@@ -1,6 +1,6 @@
 {
   "name": "gateway-extension-workbuddycn",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "private": true,
   "description": "Standalone Gateway Extension for Tencent CodeBuddy / WorkBuddy China mainland (provider id: workbuddycn)",
   "type": "module",

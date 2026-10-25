@@ -40,6 +40,12 @@ export class WorkBuddyCNProvider {
   private readonly store: Store
   private readonly logger: Logger
   private readonly config: AppConfig
+  /**
+   * Per-account refresh single-flight. Two concurrent chats can both notice an
+   * expired access token; without this, both would spend the same rotating
+   * refresh token and one side would lose the credential race.
+   */
+  private readonly refreshInFlight = new Map<string, Promise<number>>()
 
   constructor(opts: ProviderOptions) {
     this.store = opts.store
@@ -58,6 +64,30 @@ export class WorkBuddyCNProvider {
 
   getLogger(): Logger {
     return this.logger
+  }
+
+  /** Single-flight token refresh per account (shared by chat/quota/claim). */
+  private refreshOnce(accountId: string): Promise<number> {
+    const existing = this.refreshInFlight.get(accountId)
+    if (existing) return existing
+    const attempt = refreshCredential(this.client, this.store, accountId)
+      .finally(() => this.refreshInFlight.delete(accountId))
+    this.refreshInFlight.set(accountId, attempt)
+    return attempt
+  }
+
+  /**
+   * Refresh a near-expiry credential before an account-scoped read (quota,
+   * models, claim). Quota sync must not go stale merely because no chat has
+   * refreshed the access token yet; failures are left to the caller/cache path.
+   */
+  private async refreshIfExpired(accountId: string): Promise<void> {
+    const credential = this.store.getCredential(accountId)
+    if (!credential || credential.refresh_token.length === 0) return
+    const expiresAt = credentialExpiresAtMs(credential)
+    const needsRefresh = expiresAt === undefined || Date.now() >= expiresAt - 30_000
+    if (!needsRefresh) return
+    await this.refresh(accountId).catch(() => undefined)
   }
 
   // ── account lifecycle ───────────────────────────────────
@@ -152,7 +182,7 @@ export class WorkBuddyCNProvider {
       return { status: 'auth_failed', refreshed: false, error: 'no credential' }
     }
     try {
-      await refreshCredential(this.client, this.store, accountId)
+      await this.refreshOnce(accountId)
       this.store.setAccountStatus(accountId, 'active')
       this.logger.info('token.refresh', { account_id: accountId, status: 'ok' })
       return { status: 'active', refreshed: true, error: null }
@@ -174,11 +204,13 @@ export class WorkBuddyCNProvider {
 
   // ── models / quota ──────────────────────────────────────
   async models(accountId: string): Promise<{ models: ProtocolModelInfo[]; source: string }> {
+    await this.refreshIfExpired(accountId)
     const discovered = await discoverModels(this.client, this.store, accountId)
     return { models: discovered.models, source: discovered.source }
   }
 
   async quota(accountId: string, preferCache = false): Promise<QuotaSnapshotV1> {
+    await this.refreshIfExpired(accountId)
     return fetchQuota(this.client, this.store, accountId, preferCache)
   }
 
@@ -196,7 +228,9 @@ export class WorkBuddyCNProvider {
     if (!credential) {
       return { kind: 'needs_auth', message: 'no credential stored for this account' }
     }
-    const status = await fetchCheckinStatus(this.client, credential)
+    await this.refreshIfExpired(accountId)
+    const fresh = this.store.getCredential(accountId) ?? credential
+    const status = await fetchCheckinStatus(this.client, fresh)
     if (!status) {
       return { kind: 'failed', message: 'could not read check-in status' }
     }
@@ -206,7 +240,7 @@ export class WorkBuddyCNProvider {
     if (status.todayCheckedIn) {
       return { kind: 'already_claimed', message: 'already checked in today' }
     }
-    return claimDailyCheckin(this.client, credential)
+    return claimDailyCheckin(this.client, fresh)
   }
 
   // ── chat ────────────────────────────────────────────────
@@ -257,7 +291,7 @@ export class WorkBuddyCNProvider {
           return credential
         }
         try {
-          await refreshCredential(this.client, this.store, accountId)
+          await this.refreshOnce(accountId)
           return this.store.getCredential(accountId) ?? credential
         } catch (error) {
           if (error instanceof RefreshTokenExpiredError) {

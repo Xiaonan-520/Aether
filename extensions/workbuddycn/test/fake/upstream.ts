@@ -33,6 +33,8 @@ export interface FakeBehaviour {
   modelsStatus?: number
   authStateStatus?: number
   refreshStatus?: number
+  /** Artificial latency on the token-refresh endpoint (single-flight tests). */
+  refreshDelayMs?: number
   accountNeverReady?: boolean
 }
 
@@ -45,11 +47,16 @@ export class FakeWorkBuddyCN {
   /** True when a hang-mode chat response was aborted by the consumer. */
   lastChatAborted = false
   lastChatBody?: Record<string, unknown>
+  /** Authorization headers observed on chat calls (fake tokens only). */
+  chatAuthorizations: string[] = []
+  /** Times the token-refresh endpoint was hit (single-flight assertion). */
+  refreshCalls = 0
 
   loginUrl = 'https://www.codebuddy.cn/login/?platform=ide&state=fake-state'
 
   private tokenPollCount = 0
   private accountPollCount = 0
+  private tokenSerial = 0
   /** Times the claim endpoint was actually hit (0 ⇒ guard worked). */
   checkinClaimCalls = 0
 
@@ -115,10 +122,17 @@ export class FakeWorkBuddyCN {
     }
 
     if (path === '/v2/plugin/auth/token/refresh') {
-      return delayed(() => {
+      this.refreshCalls += 1
+      const respond = (): void => {
         if (b.refreshStatus) return void json(b.refreshStatus, { code: 1, message: 'refresh fail' })
         return void json(200, { code: 0, data: this.tokenPayload() })
-      })
+      }
+      if (b.refreshDelayMs) {
+        setTimeout(respond, b.refreshDelayMs)
+        return
+      }
+      respond()
+      return
     }
 
     if (path === '/console/enterprises/personal/models' || path === '/v3/config') {
@@ -160,6 +174,9 @@ export class FakeWorkBuddyCN {
     }
 
     if (path === '/v2/chat/completions') {
+      if (typeof req.headers.authorization === 'string') {
+        this.chatAuthorizations.push(req.headers.authorization)
+      }
       void readJson(req).then((body) => {
         this.lastChatBody = body
         this.handleChat(res, b)
@@ -246,9 +263,11 @@ export class FakeWorkBuddyCN {
   }
 
   tokenPayload(): Record<string, unknown> {
+    this.tokenSerial += 1
+    const serial = `${this.tokenSerial}-${Date.now()}`
     return {
-      accessToken: `fake-access-${Date.now()}`,
-      refreshToken: `fake-refresh-${Date.now()}`,
+      accessToken: `fake-access-${serial}`,
+      refreshToken: `fake-refresh-${serial}`,
       expiresIn: 8000,
       refreshExpiresIn: 86400,
       tokenType: 'Bearer',

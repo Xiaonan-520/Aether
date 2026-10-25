@@ -180,8 +180,17 @@ export function upstreamError(status: number, bodyText: string): ProtocolError {
   const msg = parsed && typeof parsed.msg === 'string' ? parsed.msg
     : parsed && typeof parsed.message === 'string' ? parsed.message
       : ''
-  if (code === 6004 || /频率限制|频率超出|使用量已超出|rate.?limit|frequency limit|usage exceeds|too many requests/i.test(msg)) {
+  // Frequency/rate limiting is account-recoverable after a cooldown, while an
+  // exhausted balance is not: keep them in different protocol kinds so Core
+  // parks the account instead of retrying it every minute. Code 6004 is the
+  // observed rate-limit code; usage/quota wording is intentionally a separate
+  // branch (and checked before the HTTP status, so a 403 quota response is not
+  // mistaken for a dead credential).
+  if (code === 6004 || /频率限制|频率超出|rate.?limit|frequency limit|too many requests/i.test(msg)) {
     return errors.rateLimit('upstream rate limit', { httpStatus: 429, retryable: true })
+  }
+  if (/使用量已超出|usage exceeds|insufficient.?quota|quota.?exceed|额度.{0,8}(超出|用尽|不足)|balance insufficient/i.test(msg)) {
+    return errors.quotaExhausted('upstream quota exhausted', { httpStatus: status === 429 ? 429 : status })
   }
   if (status === 401 || status === 403) return errors.authInvalid(`upstream auth rejected (HTTP ${status})`, { httpStatus: status })
   if (status === 429) return errors.rateLimit('upstream rate limit', { httpStatus: 429, retryable: true })

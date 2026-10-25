@@ -245,3 +245,23 @@ describe('account pool — reportResult state machine', () => {
     expect(round2c.cooldownUntil).toBe(h.now + 480_000)
   })
 })
+
+describe('account pool — concurrent report consistency', () => {
+  it('counts failures from stale snapshots instead of losing them', () => {
+    const h = new Harness(makeAccount({ id: 'a1' }))
+    const stale = h.accounts.get('a1')!
+    const timeout = () => new UpstreamError({ kind: 'TIMEOUT', message: 'idle timeout' })
+
+    // Simulate three in-flight requests that all captured the same account
+    // snapshot before any of them reported back.
+    const after1 = h.pool.reportResult(stale, timeout())
+    const after2 = h.pool.reportResult(stale, timeout())
+    const after3 = h.pool.reportResult(stale, timeout())
+
+    expect(after1.failureCount).toBe(1)
+    expect(after2.failureCount).toBe(2)
+    expect(after3.failureCount).toBe(3)
+    expect(after3.status).toBe('cooldown')
+    expect(after3.cooldownUntil).toBe(h.now + 60_000)
+  })
+})

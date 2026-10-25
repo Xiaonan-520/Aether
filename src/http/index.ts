@@ -60,6 +60,7 @@ export async function main(): Promise<void> {
 
   const pool = new AccountPool({
     listAccounts: (provider) => store.listAccounts(provider).map((s) => s.account),
+    getAccount: (id) => store.getAccount(id)?.account,
     patchAccount: (id, patch) => void store.patchAccount(id, patch),
     hasCredential: (account) => store.getAccount(account.id)?.credential != null,
     refreshAccount: async (account) => {

@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import {
   errors, ProtocolError, isProtocolErrorKind, kindForUpstreamStatus, UPSTREAM_ERROR_KINDS,
 } from '../../src/protocol/errors.js'
+import { upstreamError } from '../../src/provider/workbuddycn/chat.js'
 
 describe('protocol error mapping', () => {
   it('exposes exactly the Gateway UpstreamErrorKind vocabulary + PROTOCOL_VIOLATION', () => {
@@ -59,5 +60,26 @@ describe('protocol error mapping', () => {
     const e = errors.authInvalid('upstream rejected the credential')
     const serialized = JSON.stringify(e.toBody())
     expect(serialized).not.toMatch(/access_token|refresh_token|eyJ[A-Za-z0-9_-]+/)
+  })
+})
+
+describe('WorkBuddyCN upstream error classification', () => {
+  const body = (message: string, code = 400): string => JSON.stringify({ code, message })
+
+  it('maps usage/quota exhaustion to QUOTA_EXHAUSTED (not a retryable rate limit)', () => {
+    expect(upstreamError(400, body('使用量已超出')).kind).toBe('QUOTA_EXHAUSTED')
+    expect(upstreamError(403, body('insufficient quota')).kind).toBe('QUOTA_EXHAUSTED')
+    expect(upstreamError(400, body('usage exceeds the plan limit')).kind).toBe('QUOTA_EXHAUSTED')
+  })
+
+  it('keeps frequency/rate-limit messages as RATE_LIMIT', () => {
+    expect(upstreamError(400, body('频率限制', 6004)).kind).toBe('RATE_LIMIT')
+    expect(upstreamError(429, body('too many requests')).kind).toBe('RATE_LIMIT')
+  })
+
+  it('does not turn an ordinary 400 into a retryable or account-level error', () => {
+    const err = upstreamError(400, body('invalid parameter'))
+    expect(err.kind).toBe('TERMINAL')
+    expect(err.retryable).toBe(false)
   })
 })

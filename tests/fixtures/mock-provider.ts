@@ -114,15 +114,15 @@ export class MockProvider implements Provider {
   }
 
   readonly ops = {
-    refreshAccount: async (account: Account): Promise<RefreshResult> => {
+    refreshAccount: async (_ctx: ProviderCtx, account: Account): Promise<RefreshResult> => {
       if (this.refreshFn) return this.refreshFn(account)
       return { refreshable: true, expiresAt: Date.now() + 3_600_000, refreshed: true }
     },
-    getQuota: async (account: Account): Promise<QuotaSnapshot> => {
+    getQuota: async (_ctx: ProviderCtx, account: Account): Promise<QuotaSnapshot> => {
       if (this.quotaFn) return this.quotaFn(account)
       return { known: true, remaining: 100, total: 200, resetAt: null, lastUpdatedAt: Date.now(), rawJson: null }
     },
-    claimCredits: async (account: Account): Promise<ClaimOutcome> => {
+    claimCredits: async (_ctx: ProviderCtx, account: Account): Promise<ClaimOutcome> => {
       if (this.claimFn) return this.claimFn(account)
       return { kind: 'unsupported' }
     },

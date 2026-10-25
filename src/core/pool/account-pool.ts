@@ -32,6 +32,8 @@ export interface SelectedAccount {
 export interface PoolDeps {
   /** all stored accounts for a provider (already decrypted-agnostic) */
   listAccounts: (provider: string) => Account[]
+  /** latest account by id (preferred over listAccounts for outcome updates) */
+  getAccount?: (id: string) => Account | undefined
   /** persist a mutated account */
   patchAccount: (id: string, patch: Partial<Account>) => void
   /** resolve credential presence without exposing the secret */
@@ -130,10 +132,17 @@ export class AccountPool {
    */
   reportResult(account: Account, error?: UpstreamError): Account {
     const now = this.now()
+    // In-flight requests all hold the account snapshot captured at selection
+    // time. Re-read the latest persisted row before applying an outcome so
+    // concurrent failures accumulate instead of overwriting each other with
+    // the same stale failureCount (which would prevent cooldown / backoff).
+    const current = (this.deps.getAccount?.(account.id)
+      ?? this.deps.listAccounts(account.provider).find((a) => a.id === account.id)
+      ?? account)
 
     if (!error) {
       const next: Account = {
-        ...account,
+        ...current,
         status: 'active',
         failureCount: 0,
         lastSuccessAt: now,
@@ -141,14 +150,14 @@ export class AccountPool {
         cooldownUntil: null,
         updatedAt: now,
       }
-      this.deps.patchAccount(account.id, next)
+      this.deps.patchAccount(current.id, next)
       return next
     }
 
     switch (error.kind) {
       case 'AUTH_INVALID':
       case 'TOKEN_EXPIRED': {
-        const next = this.patch(account, {
+        const next = this.patch(current, {
           status: 'token_expired',
           lastError: error.message,
           lastFailureAt: now,
@@ -158,19 +167,19 @@ export class AccountPool {
       case 'RATE_LIMIT': {
         const model = error.detail?.match(/model:(\S+)/)?.[1]
         const windowMs = error.retryAfterMs ?? DEFAULT_RATE_LIMIT_MS
-        const rateLimits = { ...account.modelRateLimits }
+        const rateLimits = { ...current.modelRateLimits }
         if (model) rateLimits[model] = { resetAtMs: now + windowMs }
-        return this.patch(account, {
+        return this.patch(current, {
           status: 'rate_limited',
           modelRateLimits: rateLimits,
           lastError: error.message,
           lastFailureAt: now,
           // account-level cooldown only when we cannot attribute a model
-          cooldownUntil: model ? account.cooldownUntil : now + windowMs,
+          cooldownUntil: model ? current.cooldownUntil : now + windowMs,
         })
       }
       case 'QUOTA_EXHAUSTED': {
-        return this.patch(account, {
+        return this.patch(current, {
           status: 'quota_exhausted',
           lastError: error.message,
           lastFailureAt: now,
@@ -178,29 +187,29 @@ export class AccountPool {
       }
       case 'NEEDS_CAPTCHA':
       case 'NEEDS_MANUAL': {
-        return this.patch(account, {
+        return this.patch(current, {
           status: 'needs_manual_action',
-          quotaManualRequired: error.kind === 'NEEDS_CAPTCHA' ? true : account.quotaManualRequired,
+          quotaManualRequired: error.kind === 'NEEDS_CAPTCHA' ? true : current.quotaManualRequired,
           lastError: error.message,
           lastFailureAt: now,
         })
       }
       case 'TERMINAL': {
         // business rejection: do not poison the account, but record it
-        return this.patch(account, {
+        return this.patch(current, {
           lastError: error.message,
           lastFailureAt: now,
         })
       }
       default: {
         // TIMEOUT / TRANSPORT / UPSTREAM_5XX / EMPTY_RESPONSE: consecutive failures
-        const failureCount = account.failureCount + 1
+        const failureCount = current.failureCount + 1
         if (failureCount >= FAILURE_COOLDOWN_THRESHOLD) {
           const backoff = Math.min(
             FAILURE_COOLDOWN_BASE_MS * 2 ** (failureCount - FAILURE_COOLDOWN_THRESHOLD),
             FAILURE_COOLDOWN_MAX_MS,
           )
-          return this.patch(account, {
+          return this.patch(current, {
             status: 'cooldown',
             failureCount,
             cooldownUntil: now + backoff,
@@ -208,7 +217,7 @@ export class AccountPool {
             lastFailureAt: now,
           })
         }
-        return this.patch(account, {
+        return this.patch(current, {
           failureCount,
           lastError: error.message,
           lastFailureAt: now,

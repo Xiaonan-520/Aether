@@ -28,7 +28,10 @@ import { EXTENSION_ID, PROVIDER_ID, PROTOCOL_VERSION } from './types.js'
 //        (content/reasoning_content/refusal/tool_calls/...) where most fields
 //        are empty; emitting "" / [] as real increments produced up to three
 //        downstream frames per token (67% empty shells).
-export const EXTENSION_VERSION = '1.0.9'
+// 1.0.10: multi-account hardening — single-flight token refresh per account,
+//         refresh near-expiry credentials before quota/model/claim reads, and
+//         distinguish quota exhaustion from retryable rate limiting.
+export const EXTENSION_VERSION = '1.0.10'
 
 /** Fallback catalog (mirrors the upstream `buddy` CN static list). Live discovery wins. */
 const FALLBACK_MODELS: ReadonlyArray<{
