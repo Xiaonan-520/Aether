@@ -244,6 +244,29 @@ describe('chat service — failover', () => {
   })
 })
 
+describe('chat service — unavailable account diagnostics', () => {
+  it('explains why an explicit provider::model cannot be served instead of hiding it', async () => {
+    const h = setup({
+      accounts: [account('mockb', 'mockb-b1', { status: 'quota_exhausted' })],
+    })
+    const error = await h.chat
+      .handle({ ...chatReq, model: 'mockb::shared-model' })
+      .catch((err: unknown) => err)
+    expect(error).toMatchObject({ status: 503 })
+    expect((error as Error).message).toContain('no available account')
+    expect((error as Error).message).toContain('quota_exhausted')
+    expect(h.provider.chatCalls).toHaveLength(0)
+  })
+
+  it('never reports a valid model as not-found when its accounts are disabled', async () => {
+    const h = setup({ accounts: [account('mock', 'mock-a1', { enabled: false })] })
+    const error = await h.chat.handle(chatReq).catch((err: unknown) => err)
+    expect(error).toMatchObject({ status: 503 })
+    expect((error as Error).message).toContain('all accounts disabled')
+    expect((error as Error).message).not.toContain('not found')
+  })
+})
+
 describe('chat service — streaming prefetch failover', () => {
   const streamReq = { ...chatReq, stream: true }
 
