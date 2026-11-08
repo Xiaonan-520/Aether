@@ -1,0 +1,32 @@
+{
+  "name": "gateway-extension-zcode",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone Gateway Extension for ZCode (Z.AI coding plan, Anthropic Messages upstream)",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run test/unit",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.6.0",
+    "happy-dom": "^20.14.6"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "allowScripts": {
+    "better-sqlite3@9.6.0": true
+  }
+}
