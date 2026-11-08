@@ -60,17 +60,25 @@ SOFTWARE.
   account-pool semantics). **No source code from this project is included in
   this repository.**
 
-## TriDefender/zcode-api — no license (reference only)
+## TriDefender/zcode-api — CC BY-NC-SA 4.0 (architecture port, extensions/zcode solver)
 
 - **Project:** zcode-api
 - **Repository:** https://github.com/TriDefender/zcode-api
-- **License:** None. The repository is public but ships no license file; all
-  rights remain with the author.
-- **What was used:** Research/reference only — publicly observable upstream
-  behavior (the Aliyun captcha challenge variants and retry semantics).
-  **No source code from this project is included in this repository.** This
-  project makes no claim to any authorization from its author and does not
-  treat it as a dependency.
+- **License:** CC BY-NC-SA 4.0 (Attribution-NonCommercial-ShareAlike 4.0
+  International), per the upstream repository's LICENSE and README.
+- **What was used:** `extensions/zcode/src/solver/` is an architecture port of
+  its in-process happy-dom Aliyun captcha solver (`captcha-happy.ts` and the
+  pool/governor/retry scaffolding), rewritten in TypeScript for Node.js ESM
+  and wired to this project's error semantics. The port is **active only when
+  an operator explicitly sets `ZCODE_CAPTCHA_MODE=auto`**; the default
+  `manual` path contains none of that code.
+- **Consequences:** CC BY-NC-SA 4.0 is a non-commercial license — the solver
+  portions of this repository inherit it and **may not be used commercially**.
+  ShareAlike applies to adaptations of those portions. This is a deliberate,
+  documented deviation from the rest of this repository (MIT); see the
+  `ZCODE_CAPTCHA_MODE` section of README.md for the compliance notes. The
+  attribution here satisfies the BY requirement; no endorsement by the
+  upstream author is implied.
 
 ## Qoder client — proprietary (not distributed)
 
