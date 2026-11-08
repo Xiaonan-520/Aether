@@ -985,6 +985,24 @@ export function applyPolyfills(w: Record<string, unknown>): void {
       port2 = makePort();
     };
   }
+  if (!w.Worker) {
+    // pe VM 会 new Worker(...)（happy-dom 没有 Web Worker）。没有 stub 时
+    // 抛 ReferenceError 且作为异步 unhandled rejection 浮出（CI 的 vitest
+    // 计为致命）。stub 是惰性的 —— VM 的降级路径本就容忍 Worker 不可用。
+    w.Worker = class Worker {
+      onmessage: unknown = null;
+      onerror: unknown = null;
+      postMessage(): void {}
+      terminate(): Promise<unknown> {
+        return Promise.resolve();
+      }
+      addEventListener(): void {}
+      removeEventListener(): void {}
+      dispatchEvent(): boolean {
+        return false;
+      }
+    };
+  }
   if (!w.IntersectionObserver) {
     w.IntersectionObserver = class IntersectionObserver {
       constructor(cb?: unknown) {
