@@ -13,7 +13,6 @@ import { Scheduler } from '../src/core/worker/scheduler.js'
 import { loadConfig } from '../src/config/index.js'
 import { createGatewayApp } from '../src/http/app.js'
 import { MockProvider, mockModels } from './fixtures/mock-provider.js'
-import { ZCodeCaptchaManager } from '../src/providers/zcode/captcha/index.js'
 import type { Account } from '../src/core/types.js'
 import type { ServiceContext } from '../src/service/context.js'
 
@@ -70,7 +69,6 @@ function setup() {
     }),
     scheduler,
     now: () => Date.now(),
-    captcha: new ZCodeCaptchaManager(),
   }
   return { ...createGatewayApp(ctx), store, scheduler, registry }
 }

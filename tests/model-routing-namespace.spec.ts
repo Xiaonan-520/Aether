@@ -20,7 +20,6 @@ import { ModelService } from '../src/service/model-service.js'
 import { ChatService } from '../src/service/chat-service.js'
 import { LoginService } from '../src/service/login-service.js'
 import { MockProvider } from './fixtures/mock-provider.js'
-import { createZCodeProvider } from '../src/providers/zcode/provider.js'
 import { createBuddyProvider } from '../src/providers/shared/buddy/provider.js'
 import { WORKBUDDY_CN } from '../src/providers/shared/buddy/product.js'
 import { createLobsteraiProvider } from '../src/providers/lobsterai/provider.js'
@@ -108,7 +107,6 @@ function setup(opts: {
       hasCredential: () => true,
     }),
     now: () => Date.now(),
-    captcha: undefined as never,
   }
   return {
     app: createGatewayApp(ctx).app,
@@ -290,8 +288,17 @@ describe('/v1/models — namespace listing contract', () => {
 })
 
 describe('built-in provider sync — namespace normalization', () => {
-  it('zcode listModels emits provider::model ids with bare upstreamModel', async () => {
-    const provider = createZCodeProvider()
+  it('extension providers emit provider::model ids with bare upstreamModel (mock twin of the migrated zcode case)', async () => {
+    // The built-in zcode adapter moved to extensions/zcode; the namespacing
+    // guarantee (provider::model ids, bare upstreamModel) is a protocol
+    // behaviour now pinned with the mock provider.
+    const provider = new MockProvider({
+      id: 'zcode',
+      models: [
+        { modelId: 'zcode::glm-5.2', provider: 'zcode', upstreamModel: 'glm-5.2', name: 'GLM-5.2', capabilities: { vision: false, toolCall: true, streaming: true }, enabled: true, priority: 90, metadataJson: null },
+        { modelId: 'zcode::glm-5.1', provider: 'zcode', upstreamModel: 'glm-5.1', name: 'GLM-5.1', capabilities: { vision: false, toolCall: true, streaming: true }, enabled: true, priority: 89, metadataJson: null },
+      ],
+    })
     const models = await provider.chat.listModels(
       { provider: 'zcode', resolveCredential: async () => undefined },
       account('zcode', 'z-a'),
@@ -374,8 +381,14 @@ describe('built-in provider sync — namespace normalization', () => {
     expect(rows.some((m) => !m.modelId.includes('::'))).toBe(false)
   })
 
-  it('re-syncing an already-namespaced catalog never double-prefixes model ids', async () => {
-    const provider = createZCodeProvider()
+  it('re-syncing an already-namespaced catalog never double-prefixes model ids (mock twin of the migrated zcode case)', async () => {
+    const provider = new MockProvider({
+      id: 'zcode',
+      models: [
+        { modelId: 'zcode::glm-5.2', provider: 'zcode', upstreamModel: 'glm-5.2', name: 'GLM-5.2', capabilities: { vision: false, toolCall: true, streaming: true }, enabled: true, priority: 90, metadataJson: null },
+        { modelId: 'zcode::glm-5.1', provider: 'zcode', upstreamModel: 'glm-5.1', name: 'GLM-5.1', capabilities: { vision: false, toolCall: true, streaming: true }, enabled: true, priority: 89, metadataJson: null },
+      ],
+    })
     const models = await provider.chat.listModels(
       { provider: 'zcode', resolveCredential: async () => undefined },
       account('zcode', 'z-a'),

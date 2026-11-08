@@ -22,7 +22,6 @@ import { CredentialCipher } from '../src/store/crypto.js'
 import { ProviderRegistry } from '../src/core/registry/provider-registry.js'
 import { ModelRouter } from '../src/core/router/model-router.js'
 import { AccountPool } from '../src/core/pool/account-pool.js'
-import { ZCodeCaptchaManager } from '../src/providers/zcode/captcha/index.js'
 import { ExtensionManager, LocalProcessRuntime, ManagerStore, startManagerApi } from '../src/manager/index.js'
 import { MockProvider, mockModels } from './fixtures/mock-provider.js'
 import type { Account, ServiceContextLike } from '../src/core/types.js'
@@ -68,7 +67,6 @@ function baseCtx(overrides: Partial<ServiceContext> = {}): ServiceContext {
       hasCredential: () => true,
     }),
     now: () => Date.now(),
-    captcha: new ZCodeCaptchaManager(),
     ...overrides,
   }
 }

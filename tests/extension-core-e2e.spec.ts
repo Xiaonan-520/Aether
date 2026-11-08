@@ -357,7 +357,6 @@ describe('Phase 3 local E2E — Core → Manager → LobsterAI Extension', () =>
     const { AccountPool } = await import('../src/core/pool/account-pool.js')
     const { CredentialCipher } = await import('../src/store/crypto.js')
     const { loadConfig } = await import('../src/config/index.js')
-    const { ZCodeCaptchaManager } = await import('../src/providers/zcode/captcha/manager.js')
 
     const store = new MemoryStore()
     const cipher = new CredentialCipher('0123456789abcdef')
@@ -397,8 +396,7 @@ describe('Phase 3 local E2E — Core → Manager → LobsterAI Extension', () =>
         hasCredential: () => true,
       }),
       now: () => Date.now(),
-      captcha: new ZCodeCaptchaManager(),
-    } as never
+      } as never
     const login = new LoginService(ctx)
     const synced = await login.syncModels('lobsterai', account)
     expect(synced).toBeGreaterThan(0)

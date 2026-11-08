@@ -16,7 +16,6 @@ import { CredentialCipher } from '../src/store/crypto.js'
 import { ProviderRegistry } from '../src/core/registry/provider-registry.js'
 import { ModelRouter } from '../src/core/router/model-router.js'
 import { AccountPool } from '../src/core/pool/account-pool.js'
-import { ZCodeCaptchaManager } from '../src/providers/zcode/captcha/index.js'
 import type { ServiceContext } from '../src/service/context.js'
 import { MIN_PASSWORD_LENGTH } from '../src/core/auth/password.js'
 
@@ -52,7 +51,6 @@ function makeCtx(now = 1_700_000_000_000): ServiceContext {
     registry,
     router: new ModelRouter(registry, () => []),
     pool,
-    captcha: new ZCodeCaptchaManager(),
     now: () => now,
   }
 }

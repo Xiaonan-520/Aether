@@ -7,7 +7,6 @@ import { AccountPool } from '../src/core/pool/account-pool.js'
 import { loadConfig } from '../src/config/index.js'
 import { createGatewayApp } from '../src/http/app.js'
 import { MockProvider, mockModels } from './fixtures/mock-provider.js'
-import { ZCodeCaptchaManager } from '../src/providers/zcode/captcha/index.js'
 import { UpstreamError } from '../src/core/errors/upstream-error.js'
 import type { Account, ServiceContextLike } from '../src/core/types.js'
 import type { ServiceContext } from '../src/service/context.js'
@@ -53,7 +52,6 @@ function setup(chatScript?: Parameters<typeof MockProvider.prototype['chat']['ch
       hasCredential: () => true,
     }),
     now: () => Date.now(),
-    captcha: new ZCodeCaptchaManager(),
   }
   return { ...createGatewayApp(ctx), store, provider }
 }
@@ -320,20 +318,5 @@ describe('http — /api admin', () => {
     expect(((await jobs.json()).jobs as unknown[]).length).toBe(1)
     const events = await app.request('/api/events?limit=10', { headers: adminHeaders })
     expect(Array.isArray((await events.json()).events)).toBe(true)
-  })
-})
-
-describe('http — zcode captcha authorize page', () => {
-  it('serves the widget page without auth and without embedding secrets', async () => {
-    const { app } = setup()
-    const res = await app.request('/captcha/zcode')
-    expect(res.status).toBe(200)
-    expect(res.headers.get('content-type')).toContain('text/html')
-    const html = await res.text()
-    expect(html).toContain('initAliyunCaptcha')
-    expect(html).toContain('/api/accounts/zcode/captcha')
-    // the page must never embed credentials — the operator supplies the token
-    expect(html).not.toContain('admin-token-9')
-    expect(html).not.toContain('gw-key-123')
   })
 })

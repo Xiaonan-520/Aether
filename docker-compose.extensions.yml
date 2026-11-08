@@ -77,6 +77,20 @@ services:
       - gw-ext-net
     profiles: ["fake-extension"] # activated explicitly: --profile fake-extension
 
+  gateway-extension-zcode-build:
+    # ZCode extension (provider id: zcode). Captcha modes via ZCODE_CAPTCHA_MODE:
+    # manual (default; human handoff) | auto (happy-dom solver; ToS risk with
+    # the deployer) | off. Install via the Extension Manager (install-from-image)
+    # or the Console. Built locally like the fake extension above.
+    image: local/gateway-extension-zcode:1.0.0
+    build:
+      context: ./extensions/zcode
+      dockerfile: Dockerfile
+    entrypoint: ["node", "-e", "setTimeout(() => {}, 2147483647)"]
+    networks:
+      - gw-ext-net
+    profiles: ["zcode-extension"] # activated explicitly: --profile zcode-extension
+
 networks:
   gw-front:
     driver: bridge

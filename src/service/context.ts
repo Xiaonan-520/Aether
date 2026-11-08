@@ -9,7 +9,6 @@ import type { ModelRouter } from '../core/router/model-router.js'
 import type { AccountPool } from '../core/pool/account-pool.js'
 import type { StoreGateway } from '../store/types.js'
 import type { GatewayConfig } from '../config/index.js'
-import type { ZCodeCaptchaManager } from '../providers/zcode/captcha/index.js'
 import type { Scheduler } from '../core/worker/scheduler.js'
 import type { ManagerEndpoint } from '../http/remote-bootstrap.js'
 
@@ -20,8 +19,6 @@ export interface ServiceContext {
   registry: ProviderRegistry
   router: ModelRouter
   pool: AccountPool
-  /** shared ZCode captcha token cache (manual submission only) */
-  captcha: ZCodeCaptchaManager
   /** background job queue; manual admin triggers enqueue through it */
   scheduler: Scheduler
   /** Extension Manager endpoint when configured; undefined = lifecycle routes inert */

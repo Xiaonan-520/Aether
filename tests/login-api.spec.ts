@@ -31,7 +31,7 @@ function setup(fetcher: typeof fetch = fetcherFor([])) {
   const store = new MemoryStore()
   const cipher = new CredentialCipher('0123456789abcdef')
   const registry = new ProviderRegistry()
-  const { captcha } = registerProviders(registry, { fetcher })
+  registerProviders(registry, { fetcher })
   const ctx: ServiceContext = {
     config: loadConfig({
       GATEWAY_API_KEY: 'gw-key-123',
@@ -47,10 +47,9 @@ function setup(fetcher: typeof fetch = fetcherFor([])) {
       patchAccount: (id, patch) => void store.patchAccount(id, patch),
       hasCredential: () => true,
     }),
-    captcha,
     now: () => Date.now(),
   }
-  return { ...createGatewayApp(ctx), store, registry, captcha }
+  return { ...createGatewayApp(ctx), store, registry }
 }
 
 function admin(token = ADMIN) {
@@ -58,18 +57,17 @@ function admin(token = ADMIN) {
 }
 
 describe('provider registration', () => {
-  it('registers only the remaining built-ins (qoder ×2, zcode) after the buddy-family migration', async () => {
+  it('registers only qoder ×2 as built-ins after the full provider migration', async () => {
     const { app } = setup()
     const res = await app.request('/api/providers', { headers: admin() })
     expect(res.status).toBe(200)
     const body = (await res.json()) as { providers: Array<{ id: string }> }
     const ids = body.providers.map((p) => p.id).sort()
-    // The whole buddy family (workbuddy / workbuddy-cn / codebuddy /
-    // buddy-intl) is provided by extension deployables via the Extension
-    // Manager (extensions/workbuddy, extensions/workbuddycn,
-    // src/extensions/codebuddy) — none of them are built-in anymore. Their
-    // protocol surfaces are covered by the extension E2E suites.
-    expect(ids).toEqual(['qoder', 'qoder-cn', 'zcode'])
+    // The whole buddy family AND zcode are provided by extension deployables
+    // via the Extension Manager (extensions/workbuddy, extensions/workbuddycn,
+    // src/extensions/codebuddy, extensions/zcode) — none are built-in anymore.
+    // Their protocol surfaces are covered by the extension E2E suites.
+    expect(ids).toEqual(['qoder', 'qoder-cn'])
   })
 
   it('login API returns 404/503 for the migrated buddy-family providers (now extension-provided)', async () => {

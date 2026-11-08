@@ -9,16 +9,15 @@
 import type { ProviderRegistry } from '../core/registry/provider-registry.js'
 import { createQoderProvider } from './qoder/index.js'
 import { QODER, QODER_CN } from './qoder/product.js'
-import { createZCodeProvider } from './zcode/index.js'
-import { ZCodeCaptchaManager } from './zcode/captcha/index.js'
 
 export interface RegisteredProviders {
-  captcha: ZCodeCaptchaManager
+  /** No built-in providers carry shared state any more (zcode migrated to
+   *  extensions/zcode). Kept as an empty record for call-site stability. */
+  captcha?: undefined
 }
 
 export interface RegisterOptions {
   fetcher?: typeof fetch
-  captcha?: ZCodeCaptchaManager
 }
 
 /** Register every built-in adapter. Idempotent per registry instance. */
@@ -26,7 +25,7 @@ export function registerProviders(
   registry: ProviderRegistry,
   options: RegisterOptions = {},
 ): RegisteredProviders {
-  const captcha = options.captcha ?? new ZCodeCaptchaManager(options.fetcher ? { fetcher: options.fetcher } : {})
+  void options
   // workbuddy (international) + workbuddy-cn: migrated to the extension
   // deployables (extensions/workbuddy and extensions/workbuddycn, installed
   // via the Extension Manager) — verified against the real workbuddy.ai
@@ -39,7 +38,10 @@ export function registerProviders(
   // qoder (both product instances) remain built-in: chat requires the
   // proprietary client WASM (compliance red line — never shipped in an
   // image) pending the RFC §24.7 volume-mount design.
-  registry.register(createZCodeProvider({ captcha, ...(options.fetcher ? { fetcher: options.fetcher } : {}) }))
+  // zcode: migrated to the extension deployable (extensions/zcode, installed
+  // via the Extension Manager) — the final batch of the provider migration.
+  // Its captcha surface (manual submission + authorization page) now lives in
+  // the extension (GET/POST /v1/captcha); Core no longer proxies it.
   // trae (both product instances): migrated to the extension deployable
   // (src/extensions/trae, one image serving trae/trae-intl via TRAE_PRODUCT)
   // — batch 4 of the provider migration.
@@ -51,5 +53,5 @@ export function registerProviders(
   registry.register(createQoderProvider({ product: QODER_CN, ...(options.fetcher ? { fetcher: options.fetcher } : {}) }))
   // raccoon: migrated to the extension deployable (src/extensions/raccoon,
   // installed via the Extension Manager) — batch 1 of the provider migration.
-  return { captcha }
+  return {}
 }

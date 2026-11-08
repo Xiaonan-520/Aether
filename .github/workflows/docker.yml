@@ -123,9 +123,52 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # ZCode extension: typecheck, tests (multi-account + solver regressions)
+  # and build — mirrors extension-verify (workbuddycn).
+  zcode-extension-verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extensions/zcode
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: extensions/zcode/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # solver.spec 是纯逻辑回归（校验/补丁/去重/重试），离线可跑；
+      # captcha-mode.spec 的 auto 用例在无网环境自动降级为 NEEDS_CAPTCHA 断言。
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Set up Docker Buildx
+        if: github.event_name == 'pull_request'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push on PR)
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: extensions/zcode
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   build-and-push:
     if: github.event_name != 'pull_request'
-    needs: [verify, console-verify, extension-verify]
+    needs: [verify, console-verify, extension-verify, zcode-extension-verify]
     runs-on: ubuntu-latest
     permissions:
       contents: read

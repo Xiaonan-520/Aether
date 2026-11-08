@@ -28,7 +28,6 @@ import {
 import { toOpenAiErrorBody, toOpenAiStatus } from '../core/errors/normalizer.js'
 import { UpstreamError } from '../core/errors/upstream-error.js'
 import { AmbiguousModelError } from '../core/router/model-router.js'
-import { renderAuthorizePage, widgetParams } from '../providers/zcode/captcha/index.js'
 
 export interface GatewayApp {
   app: Hono
@@ -293,10 +292,9 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
   // -- interactive login (Phase 3B) ----------------------------------------
   // POST /api/accounts/:provider/login       -> start a login, returns the URL
   // GET  /api/accounts/:provider/login/:id   -> poll; persists the credential
-  // POST /api/accounts/:provider/captcha     -> operator submits a captcha token
-  // GET  /captcha/zcode                       -> human captcha authorization page
-  //                                              (no secrets embedded; admin
-  //                                              token is entered in the page)
+  // NOTE: the zcode captcha surface (POST /api/accounts/zcode/captcha +
+  // GET /captcha/zcode) moved into the extension (GET/POST /v1/captcha) with
+  // the extensions/zcode migration — Core no longer proxies it.
   app.post('/api/accounts/:provider/login', async (c) => {
     const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>))
     const provider = c.req.param('provider')
@@ -317,31 +315,6 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
     const payload = body.credential !== undefined ? body.credential : body
     return c.json(await login.submitCredential(c.req.param('provider'), c.req.param('loginId'), payload))
   })
-  app.post('/api/accounts/:provider/captcha', async (c) => {
-    const provider = c.req.param('provider')
-    if (provider !== 'zcode') {
-      throw new OpenAIApiError(400, 'invalid_request_error', `provider "${provider}" does not use a captcha`)
-    }
-    const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>))
-    const verifyParam = typeof body.verify_param === 'string' ? body.verify_param : ''
-    if (verifyParam.trim().length === 0) {
-      throw new OpenAIApiError(400, 'invalid_request_error', 'verify_param is required')
-    }
-    ctx.captcha.submit(verifyParam)
-    return c.json({ ok: true, provider, expires_in: Math.floor(ctx.captcha.cacheTtl / 1000) })
-  })
-
-  // Human captcha authorization page. Sits outside /api/* auth on purpose:
-  // the HTML embeds no secrets — the operator pastes the admin token into the
-  // page (or ?token= pre-fills it) and the browser posts it to the protected
-  // submit endpoint above.
-  app.get('/captcha/zcode', async (c) => {
-    const config = await ctx.captcha.fetchConfig()
-    const widget = widgetParams(config)
-    const html = renderAuthorizePage({ ...widget, submitPath: '/api/accounts/zcode/captcha' })
-    return c.html(html)
-  })
-
   app.post('/api/accounts/:id/import-credential', async (c) => {
     const body = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>))
     // A ready credential blob is required here; a bare/missing body is a client

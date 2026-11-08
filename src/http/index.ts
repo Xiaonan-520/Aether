@@ -38,7 +38,7 @@ export async function main(): Promise<void> {
   const cipher = new CredentialCipher(config.gatewaySecret)
   const registry = new ProviderRegistry()
   // Phase 3B: WorkBuddy + CodeBuddy (shared Buddy protocol) and ZCode.
-  const { captcha } = registerProviders(registry)
+  registerProviders(registry)
   // Persist the registered providers: accounts.provider has a foreign key to
   // the providers table (with foreign_keys = ON), so an account cannot be
   // created until its provider row exists.
@@ -96,7 +96,6 @@ export async function main(): Promise<void> {
     registry,
     router: new ModelRouter(registry, () => store.listModels()),
     pool,
-    captcha,
     scheduler,
     now: () => Date.now(),
   }

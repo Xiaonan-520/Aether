@@ -49,7 +49,7 @@ Provider 分两类：**内置适配器**（编译进 Core）和 **Extension**（
 | workbuddy / workbuddycn | Extension（独立容器） | 浏览器授权 | 真实账号 E2E 验证，生产运行中 |
 | codebuddy | 内置 | 浏览器授权 | 真实账号 E2E 验证 |
 | buddy-intl | 内置 | 浏览器授权 | 真实账号 E2E 验证 |
-| zcode | 内置 | OAuth（CLI 流程） | 真实账号 E2E 验证；人工 CAPTCHA 交接，见下文 |
+| zcode | Extension（`extensions/zcode`） | OAuth（CLI 两段式）或凭据导入 | 已迁移为 Extension 容器；CAPTCHA 人工交接（默认）或 happy-dom 自动求解（`ZCODE_CAPTCHA_MODE=auto`，风险自担），见下文 |
 | qoder / qoder-cn | 内置 | device code | 登录/模型/额度可用；聊天依赖客户端 WASM，见下文 |
 | lobsterai / cline / trae / trae-intl / codearts / loomy / raccoon | Extension（`src/extensions/`） | 各异（WorkOS 设备码、短信、微信扫码、PKCE+DPoP 等） | 已迁移为 Extension 容器，各有 E2E 测试 |
 
@@ -57,7 +57,13 @@ Provider 分两类：**内置适配器**（编译进 Core）和 **Extension**（
 
 ### ZCode 的 CAPTCHA 策略
 
-ZCode 上游偶尔要求阿里云验证码。网关的做法是：检测到挑战后，在 `GET /captcha/zcode` 提供官方验证码组件给人工完成，人工提交的 token 走管理 API 回传。**没有自动打码、没有绕过、没有浏览器指纹伪造**——这是刻意的设计取舍。拿不到新的有效 token 时，账号会被挂到 `needs_manual_action`，账号池自动跳过它。
+ZCode 上游偶尔要求阿里云验证码。策略由 `extensions/zcode` 的 `ZCODE_CAPTCHA_MODE` 决定：
+
+- **manual（默认）**：检测到挑战后，扩展在 `GET /v1/captcha` 提供官方验证码组件给人工完成，token 提交回扩展（单飞等待：在飞请求在提交瞬间全部恢复）。**没有自动打码、没有绕过、没有浏览器指纹伪造**。拿不到有效 token 时账号挂 `needs_manual_action`，账号池自动跳过。
+- **auto（显式开启）**：`src/solver/` 内置 happy-dom 求解器（移植自 [TriDefender/zcode-api](https://github.com/TriDefender/zcode-api)，CC BY-NC-SA 4.0）——固定指纹、网络层接管、严格结果校验、令牌池、CPU 治理。**这是绕过风控的自动化行为，违反上游 ToS 的可能性极高，且该部分代码不可商用**；由部署者自行评估并承担。
+- `off`：不发送任何验证码头。
+
+Core 不再持有任何 zcode captcha 状态——旧的 `/captcha/zcode` 页面与 `/api/accounts/zcode/captcha` 提交端点已随迁移移入扩展。
 
 ### Qoder 加密推理
 
@@ -202,7 +208,7 @@ POST   /api/accounts/:provider/login               发起交互式登录
 GET    /api/accounts/:provider/login/:loginId      轮询登录状态
 POST   /api/accounts/:provider/login/:loginId/credential   完成验证码/token 交换
 POST   /api/accounts/:id/import-credential         导入现成凭据
-POST   /api/accounts/:provider/captcha             仅 zcode：提交人工完成的 CAPTCHA token
+（zcode 的 CAPTCHA 提交端点已随扩展迁移移入 extensions/zcode —— POST /v1/captcha）
 GET    /api/jobs?type=                             后台任务历史
 GET    /api/events?limit=                          审计事件
 POST   /api/keys                                   创建 Admin Token（完整值只返回这一次）
@@ -234,7 +240,7 @@ curl -X POST -H "Authorization: Bearer $SESSION" -H 'Content-Type: application/j
 ```
 
 ```text
-GET /captcha/zcode     zcode CAPTCHA 人工交接页（浏览器打开；admin token 只提交给本网关）
+（zcode 的 CAPTCHA 人工交接页已随扩展迁移移入 extensions/zcode —— GET /v1/captcha）
 GET /healthz           存活探针，无需鉴权
 ```
 
@@ -323,7 +329,7 @@ docker pull ghcr.io/xiaonan-520/multi-provider-ai-gateway:latest
 | --- | --- | --- | --- |
 | deepseek-harness-codearts ("jet-hub") | [gitee.com/iJetLi/deepseek-harness-codearts](https://gitee.com/iJetLi/deepseek-harness-codearts) | MIT | 改编代码（Provider 协议/签名材料、Qoder WASM 对接）+ 架构参考 |
 | deepseek-harness | [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) | MIT | 架构参考；未包含其源码 |
-| zcode-api | [github.com/TriDefender/zcode-api](https://github.com/TriDefender/zcode-api) | 无（仅参考） | 上游 CAPTCHA 挑战行为的研究参考；未包含源码，无授权暗示 |
+| zcode-api | [github.com/TriDefender/zcode-api](https://github.com/TriDefender/zcode-api) | CC BY-NC-SA 4.0 | `extensions/zcode/src/solver/`（`ZCODE_CAPTCHA_MODE=auto` 的 happy-dom 求解器）的架构移植来源；manual 默认路径不包含其代码。auto 部分**不可商用** |
 | Qoder 客户端 `qoder-auth-wasm.wasm` | — | 专有 | 不分发。仅当运维者自备副本时在运行时加载 |
 
 完整署名（含 jet-hub 的 MIT 声明文本）见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
