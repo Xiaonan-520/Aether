@@ -80,10 +80,33 @@ export class AdminService {
     return redactAccount(account)
   }
 
-  patchAccount(id: string, patch: AccountPatch): Record<string, unknown> {
-    this.requireAccount(id)
+  async patchAccount(id: string, patch: AccountPatch): Promise<Record<string, unknown>> {
+    const stored = this.requireAccount(id)
     const result = this.ctx.store.patchAccount(id, { ...patch, updatedAt: this.ctx.now() })
     if (!result.ok) throw new OpenAIApiError(404, 'invalid_request_error', result.error)
+    // Remote extensions own their account rows (RFC §10.3): a local flip alone
+    // would leave the extension still routing requests to a "disabled" account.
+    // The local write stays authoritative — an unreachable extension must not
+    // make the Console unable to disable an account — so failures are recorded
+    // as an event and swallowed.
+    if (typeof patch.enabled === 'boolean') {
+      const adapter = this.ctx.registry.get(stored.account.provider)
+      if (adapter?.ops.setAccountEnabled) {
+        try {
+          await adapter.ops.setAccountEnabled(
+            { provider: stored.account.provider, resolveCredential: async () => undefined },
+            stored.account,
+            patch.enabled,
+          )
+        } catch (err) {
+          this.ctx.store.addEvent({
+            ts: this.ctx.now(), level: 'warn', provider: stored.account.provider, accountId: id,
+            kind: 'account.enabled_sync_failed',
+            message: `enabled=${patch.enabled} not propagated: ${err instanceof Error ? err.message : String(err)}`,
+          })
+        }
+      }
+    }
     return redactAccount(this.requireAccount(id).account)
   }
 

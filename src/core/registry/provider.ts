@@ -130,6 +130,14 @@ export interface ProviderOpsImpl {
   claimCredits?(ctx: ProviderCtx, account: Account): Promise<ClaimOutcome>
   /** lightweight health probe (auth validity / reachability) */
   healthCheck?(ctx: ProviderCtx, account: Account): Promise<{ ok: boolean; error?: string }>
+  /**
+   * Push an enable/disable decision to the provider's own account store.
+   *
+   * In-process adapters keep the flag in Core's DB and omit this; remote
+   * extensions own their account state (RFC §10.3), so Core's local
+   * `enabled=false` alone would leave the extension still routing to it.
+   */
+  setAccountEnabled?(ctx: ProviderCtx, account: Account, enabled: boolean): Promise<void>
   /** true when the upstream error is terminal for this account */
   mapError?(err: unknown): UpstreamError
 }

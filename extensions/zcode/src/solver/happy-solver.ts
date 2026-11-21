@@ -1648,6 +1648,9 @@ const _reusePool: { dom: DomHandle | null; solves: number; lastUsedAt: number } 
 const REUSE_MAX_SOLVES = Number(process.env.CAPTCHA_REUSE_MAX_SOLVES || 8);
 const REUSE_MAX_IDLE_MS = Number(process.env.CAPTCHA_REUSE_MAX_IDLE_MS || 120_000);
 
+/** 最近被求解期护栏吞掉的 guest rejection（只保留摘要，不含敏感数据）。 */
+const _guestRejections: string[] = [];
+
 function takeReusableWindow(): DomHandle | null {
   const p = _reusePool;
   if (!p.dom) return null;
@@ -1704,6 +1707,43 @@ function guestErrorSummary(w: HappyDomWindow, max = 4): string {
   }
 }
 
+/**
+ * 求解期间吞掉 SDK 的良性 unhandled rejection。
+ *
+ * happy-dom 的 `w.eval()` 跑在宿主 realm 的 Promise 上，所以 guest 侧
+ * `window.addEventListener("unhandledrejection")` 永远收不到（实测命中 0 次），
+ * 只有宿主 `process` 能看到。SDK 在 solve 已经 resolve 之后还会继续内部采集
+ * 并抛 `TypeError`，没人接管就是 Node 进程级错误：单测表现为"全部 passed 但
+ * 退出码 1"，生产上是噪音日志甚至按部署策略重启。
+ *
+ * 只接管求解窗口内的 rejection，并且只记录不打印；dispose() 恢复现场，避免把
+ * 应用其它部分的真实未处理 rejection 一起吞掉（无监听者时保持原行为）。
+ */
+function installGuestRejectionGuard(): { dispose: () => void } {
+  const swallowed: string[] = [];
+  const handler = (reason: unknown): void => {
+    const err = reason instanceof Error ? reason : undefined;
+    const entry = `${err?.name ?? "Error"}: ${err?.message ?? String(reason)}`;
+    if (swallowed.length < 8) swallowed.push(entry);
+    _guestRejections.push(entry);
+    if (_guestRejections.length > 8) _guestRejections.shift();
+  };
+  process.on("unhandledRejection", handler);
+  return {
+    dispose(): void {
+      process.off("unhandledRejection", handler);
+      if (swallowed.length > 0 && process.env.CAPTCHA_DEBUG_REJECTIONS === "1") {
+        logOnce("warn", `[captcha] 求解期间吞掉 ${swallowed.length} 个良性 rejection: ${swallowed[0]}`);
+      }
+    },
+  };
+}
+
+/** 最近求解期间被吞掉的 guest rejection（供测试/运维观测，最多 8 条）。 */
+export function recentGuestRejections(): readonly string[] {
+  return _guestRejections;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 主流程
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1728,6 +1768,14 @@ export async function solveTraceless(opts: SolveOptions): Promise<string> {
   const { window: w } = dom;
   const solveStart = Date.now();
   let keepWindow = false;
+  // SDK 会在 solve 已经 resolve 之后继续跑内部采集，再把一个良性 TypeError
+  // 甩到 Promise 链上。happy-dom 的 w.eval() 用的是宿主 realm 的 Promise，
+  // 所以 realm 内 addEventListener("unhandledrejection") 收不到（实测 __hit=0）
+  // —— 只有宿主侧 process 能看见。宿主上没人接管时 Node 会把未处理 rejection
+  // 当进程级错误：单测里表现为"全部 passed + 退出码 1"，生产里是会打一条噪音
+  // 甚至按部署策略重启。这里在求解期间挂一个带作用域的护栏，只吞 SDK 区间内
+  // 的 rejection，且只记录不打印；求解失败仍由上面的 catch 走正常错误路径。
+  const rejectionGuard = installGuestRejectionGuard();
 
   try {
     // 等 SDK 就绪
@@ -1834,6 +1882,7 @@ export async function solveTraceless(opts: SolveOptions): Promise<string> {
     }
     throw err;
   } finally {
+    rejectionGuard.dispose();
     if (!keepWindow) {
       if (_reusePool.dom === dom) _reusePool.dom = null;
       destroyDom(w);

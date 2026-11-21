@@ -94,7 +94,13 @@ services:
 networks:
   gw-front:
     driver: bridge
+  # The manager creates extension containers with NetworkMode=gw-ext-net
+  # (src/manager/main.ts, GW_EXT_NETWORK default). Without an explicit `name:`
+  # Compose prefixes the project name (aether_gw-ext-net) and every container
+  # start fails with "network gw-ext-net not found" — pin the name so the
+  # manager and Compose agree. Same rule as docker-compose.phase3.yml.
   gw-ext-net:
+    name: gw-ext-net
     driver: bridge
 
 volumes:

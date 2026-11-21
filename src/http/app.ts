@@ -283,7 +283,7 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
   })
   app.patch('/api/accounts/:id', async (c) => {
     const body = await c.req.json<Record<string, unknown>>()
-    return c.json(admin.patchAccount(c.req.param('id'), body))
+    return c.json(await admin.patchAccount(c.req.param('id'), body))
   })
   app.delete('/api/accounts/:id', (c) => {
     admin.removeAccount(c.req.param('id'))
