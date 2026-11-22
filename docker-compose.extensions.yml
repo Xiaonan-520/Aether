@@ -79,8 +79,8 @@ services:
 
   gateway-extension-zcode-build:
     # ZCode extension (provider id: zcode). Captcha modes via ZCODE_CAPTCHA_MODE:
-    # manual (default; human handoff) | auto (happy-dom solver; ToS risk with
-    # the deployer) | off. Install via the Extension Manager (install-from-image)
+    # auto (default; happy-dom solver — start-plan accounts need a token on every
+    # request) | manual (human handoff) | off. Install via the Extension Manager (install)
     # or the Console. Built locally like the fake extension above.
     image: local/gateway-extension-zcode:1.0.0
     build:
@@ -94,7 +94,13 @@ services:
 networks:
   gw-front:
     driver: bridge
+  # The manager creates extension containers with NetworkMode=gw-ext-net
+  # (src/manager/main.ts, GW_EXT_NETWORK default). Without an explicit `name:`
+  # Compose prefixes the project name (aether_gw-ext-net) and every container
+  # start fails with "network gw-ext-net not found" — pin the name so the
+  # manager and Compose agree. Same rule as docker-compose.phase3.yml.
   gw-ext-net:
+    name: gw-ext-net
     driver: bridge
 
 volumes:

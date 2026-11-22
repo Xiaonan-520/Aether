@@ -8,9 +8,18 @@
  */
 import type { ChatChunk, ChatResult, Tool } from '../../protocol/types.js'
 import type { ExtensionChatRequest } from '../../protocol/types.js'
+import { randomUUID } from 'node:crypto'
+import { buildCurrentDateMessage, buildStartPlanSystem } from './system-prompt.js'
+
+/** Which upstream gateway the request targets; start-plan needs extra shaping. */
+export type ZCodePlan = 'coding-plan' | 'start-plan'
 
 /** Canonical ChatRequest → Anthropic Messages request body. */
-export function toAnthropicBody(req: ExtensionChatRequest, upstreamModel: string): Record<string, unknown> {
+export function toAnthropicBody(
+  req: ExtensionChatRequest,
+  upstreamModel: string,
+  plan: ZCodePlan = 'coding-plan',
+): Record<string, unknown> {
   const system: string[] = []
   const messages: Array<Record<string, unknown>> = []
 
@@ -68,8 +77,48 @@ export function toAnthropicBody(req: ExtensionChatRequest, upstreamModel: string
       input_schema: tool.parameters ?? { type: 'object', properties: {} },
     }))
   }
+  if (plan === 'start-plan') applyStartPlanShape(body, messages, system.join('\n\n'))
   return body
 }
+
+/**
+ * start-plan request shape (mirrors TriDefender/zcode-api `applyStartPlanSystem`
+ * + `buildAnthropicMetadataUserId`).
+ *
+ * Three changes, all required by the start-plan edge:
+ *   1. `system` becomes the three identity blocks — the edge inspects this
+ *      field and answers 3012 when the ZCode anchor is missing.
+ *   2. a leading user turn carrying the date attachment.
+ *   3. `metadata.user_id` = the device/session blob the real client sends
+ *      (`account_uuid` is always ""; we have no deviceMid, so it is omitted).
+ * Tool-level `cache_control` is dropped: start-plan carries a single
+ * breakpoint on the stable block and rejects extra ones.
+ */
+function applyStartPlanShape(
+  body: Record<string, unknown>,
+  messages: Array<Record<string, unknown>>,
+  existingSystem: string | undefined,
+): void {
+  body.system = buildStartPlanSystem(existingSystem)
+  if (messages.length > 0) messages.unshift(buildCurrentDateMessage() as unknown as Record<string, unknown>)
+  if (Array.isArray(body.tools)) {
+    for (const tool of body.tools) {
+      if (tool && typeof tool === 'object' && 'cache_control' in tool) {
+        delete (tool as Record<string, unknown>).cache_control
+      }
+    }
+  }
+  body.metadata = {
+    user_id: JSON.stringify({ account_uuid: '', session_id: bodySessionId() }),
+  }
+}
+
+/** Session id for the start-plan metadata blob (stable per process is enough). */
+function bodySessionId(): string {
+  if (!_sessionId) _sessionId = randomUUID().replace(/-/g, '')
+  return _sessionId
+}
+let _sessionId = ''
 
 import { errors } from '../../protocol/errors.js'
 

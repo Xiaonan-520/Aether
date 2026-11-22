@@ -9,14 +9,16 @@ import { CaptchaService } from '../../src/provider/zcode/captcha-service.js'
 import { loadConfig } from '../../src/util/config.js'
 
 describe('captcha mode configuration', () => {
-  it('defaults to manual (explicit compliance boundary)', () => {
-    expect(loadConfig({} as NodeJS.ProcessEnv).captchaMode).toBe('manual')
+  // start-plan accounts need a captcha token on every request (a bare request
+  // is rejected as a non-official client), so solving is on by default.
+  it('defaults to auto', () => {
+    expect(loadConfig({} as NodeJS.ProcessEnv).captchaMode).toBe('auto')
   })
 
-  it('parses auto / off / junk (junk → manual)', () => {
-    expect(loadConfig({ ZCODE_CAPTCHA_MODE: 'auto' } as NodeJS.ProcessEnv).captchaMode).toBe('auto')
+  it('parses manual / off / junk (junk → auto)', () => {
+    expect(loadConfig({ ZCODE_CAPTCHA_MODE: 'manual' } as NodeJS.ProcessEnv).captchaMode).toBe('manual')
     expect(loadConfig({ ZCODE_CAPTCHA_MODE: 'off' } as NodeJS.ProcessEnv).captchaMode).toBe('off')
-    expect(loadConfig({ ZCODE_CAPTCHA_MODE: 'nonsense' } as NodeJS.ProcessEnv).captchaMode).toBe('manual')
+    expect(loadConfig({ ZCODE_CAPTCHA_MODE: 'nonsense' } as NodeJS.ProcessEnv).captchaMode).toBe('auto')
   })
 })
 

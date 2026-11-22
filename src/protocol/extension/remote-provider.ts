@@ -155,6 +155,16 @@ export class RemoteExtensionClient {
     return this.request('POST', '/v1/accounts', req)
   }
 
+  /**
+   * Second phase of a two-phase login (zcode: `POST /v1/accounts/:id/login`
+   * performs the upstream OAuth init and only then knows the authorize URL).
+   * Extensions with a one-shot `POST /v1/accounts` (workbuddycn) answer 404 —
+   * callers treat that as "not supported" and keep the create response.
+   */
+  beginAccountLogin(accountId: string): Promise<CreateAccountResponse> {
+    return this.request('POST', `/v1/accounts/${encodeURIComponent(accountId)}/login`, {})
+  }
+
   refreshAccount(accountId: string): Promise<AccountRefreshResponse> {
     return this.request('POST', `/v1/accounts/${encodeURIComponent(accountId)}/refresh`)
   }
@@ -360,8 +370,24 @@ export class RemoteProvider implements Provider {
           loginMode: capabilities.loginMode,
           phone: input.phone,
         })
+        // Two-phase extensions (zcode) only learn the authorize URL after a
+        // second call: `POST /v1/accounts` reserves the session slot and
+        // `POST /v1/accounts/:id/login` runs the upstream OAuth init. Without
+        // this fallback the login URL is always empty for such extensions and
+        // the Console cannot start an OAuth flow at all. One-shot extensions
+        // (workbuddycn) answer 404 here — keep their create response.
+        let loginUrl = res.authorizationUrl ?? undefined
+        if (!loginUrl) {
+          try {
+            const started = await client.beginAccountLogin(input.accountId)
+            loginUrl = started.authorizationUrl ?? undefined
+          } catch (err) {
+            const notSupported = err instanceof UpstreamError && err.status === 404
+            if (!notSupported) throw err
+          }
+        }
         return {
-          loginUrl: res.authorizationUrl ?? undefined,
+          loginUrl,
           expiresIn: res.expiresIn ?? undefined,
           pollInterval: res.pollInterval ?? undefined,
           needsManual: res.status === 'pending',
@@ -434,6 +460,11 @@ export class RemoteProvider implements Provider {
       async healthCheck(): Promise<{ ok: boolean; error?: string }> {
         const health = await client.fetchHealth()
         return { ok: health.status === 'healthy' }
+      },
+      // The extension holds the real credential and its own account rows, so
+      // Core's local flag is not enough: mirror the operator's decision there.
+      async setAccountEnabled(_ctx: ProviderCtx, account: Account, enabled: boolean): Promise<void> {
+        await client.setAccountEnabled(account.id, enabled)
       },
     }
 

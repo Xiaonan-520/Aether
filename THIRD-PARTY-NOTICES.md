@@ -69,16 +69,20 @@ SOFTWARE.
 - **What was used:** `extensions/zcode/src/solver/` is an architecture port of
   its in-process happy-dom Aliyun captcha solver (`captcha-happy.ts` and the
   pool/governor/retry scaffolding), rewritten in TypeScript for Node.js ESM
-  and wired to this project's error semantics. The port is **active only when
-  an operator explicitly sets `ZCODE_CAPTCHA_MODE=auto`**; the default
-  `manual` path contains none of that code.
+  and wired to this project's error semantics. `extensions/zcode/src/provider/
+  zcode/system-prompt.ts`, the start-plan request shaping in
+  `provider/zcode/anthropic.ts`, the plan classification in
+  `provider/zcode/plan.ts` and the captcha region header mirror its
+  start-plan/coding-plan split, identity-block injection and captcha-retry
+  discipline. `zcode-system.json` records the official client's system-prompt
+  text, reproduced as protocol data rather than code.
 - **Consequences:** CC BY-NC-SA 4.0 is a non-commercial license — the solver
   portions of this repository inherit it and **may not be used commercially**.
   ShareAlike applies to adaptations of those portions. This is a deliberate,
   documented deviation from the rest of this repository (MIT); see the
-  `ZCODE_CAPTCHA_MODE` section of README.md for the compliance notes. The
-  attribution here satisfies the BY requirement; no endorsement by the
-  upstream author is implied.
+  `ZCode 的 plan 与 CAPTCHA 策略` section of README.md for the compliance
+  notes. The attribution here satisfies the BY requirement; no endorsement by
+  the upstream author is implied.
 
 ## Qoder client — proprietary (not distributed)
 

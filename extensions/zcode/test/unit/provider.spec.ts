@@ -237,6 +237,40 @@ describe('ZCode quota', () => {
     expect(h.app.store.getQuotaCache(a)).toBeDefined()
     expect(h.app.store.getQuotaCache(b)).toBeDefined()
   })
+
+  // Live trial/start-plan accounts answer with a plan list instead of flat
+  // counters: { data: { plans: [{ status, ends_at, entitlements:
+  // [{ grant_units }] }] } }. Parsing only flat fields made every such account
+  // look "unknown" even though the upstream call had succeeded.
+  it('reads grants from the plan-list billing shape', async () => {
+    const a = await login(h, 'zc-plan')
+    h.fake.behaviour.quotaPayload = {
+      plans: [
+        {
+          status: 'active',
+          ends_at: 1_900_000_000,
+          entitlements: [
+            { grant_units: 500_000_000 },
+            { grant_units: 20 },
+          ],
+        },
+        { status: 'expired', ends_at: 1_800_000_000, entitlements: [{ grant_units: 999 }] },
+      ],
+    }
+    const res = await h.request('GET', `/v1/accounts/${a}/quota`)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      source: string
+      resources: Array<{ remaining: number | null; total: number | null; resetAt: string | null; status: string }>
+    }
+    const resource = body.resources[0]!
+    expect(body.source).toBe('authoritative')
+    expect(resource.total).toBe(500_000_020)
+    // No used/remaining counter exists upstream — it must stay null, never 0.
+    expect(resource.remaining).toBeNull()
+    expect(resource.resetAt).toBe(new Date(1_900_000_000 * 1000).toISOString())
+    expect(resource.status).toBe('ok')
+  })
 })
 
 describe('ZCode captcha handoff', () => {

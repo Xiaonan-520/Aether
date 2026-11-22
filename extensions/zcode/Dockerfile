@@ -5,7 +5,8 @@
 # rootfs, cap_drop ALL, no-new-privileges, no published ports). This Dockerfile
 # only needs to produce an image compatible with that contract.
 #
-# Captcha modes (ZCODE_CAPTCHA_MODE): manual (default; human handoff page) |
+# Captcha modes (ZCODE_CAPTCHA_MODE): auto (default; happy-dom solver) |
+# manual (human handoff page) |
 # auto (happy-dom solver ported from TriDefender/zcode-api — ToS/licence risk
 # carried by the deployer) | off. The solver needs NO extra system packages.
 FROM node:22-slim AS builder
@@ -24,7 +25,7 @@ ENV NODE_ENV=production \
     PORT=8080 \
     DATA_DIR=/data \
     LOG_LEVEL=info \
-    ZCODE_CAPTCHA_MODE=manual \
+    ZCODE_CAPTCHA_MODE=auto \
     ZCODE_CAPTCHA_CPU_LIMIT_PCT=70
 WORKDIR /app
 # Non-root; /data is the declared named-volume mount point.

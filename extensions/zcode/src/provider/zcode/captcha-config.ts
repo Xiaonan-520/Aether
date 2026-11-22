@@ -91,6 +91,14 @@ export class CaptchaConfigCache {
   invalidate(): void {
     this.state = { value: null, cachedAt: 0, negativeUntil: 0 }
   }
+
+  /**
+   * Last known region without a network round-trip (undefined until something
+   * has been cached). Feeds the per-request captcha region header.
+   */
+  peekRegion(): string | undefined {
+    return this.state.value?.region
+  }
 }
 
 const REGION_SCRIPT: Record<string, string> = {
