@@ -310,6 +310,17 @@ export function createExtensionServer(opts: RouterOptions) {
       writeJson(ctx.res, 200, outcome)
       return
     }
+    if (actionId === 'claim-status') {
+      const runtime = provider.getAutoClaim()
+      if (!runtime) {
+        writeJson(ctx.res, 200, { enabled: false, accounts: [] })
+        return
+      }
+      const states = runtime.list()
+      const filtered = accountId ? states.filter((s) => s.accountId === accountId) : states
+      writeJson(ctx.res, 200, { enabled: runtime.enabled, accounts: filtered })
+      return
+    }
     throw errors.terminal(`action "${actionId}" is declared but not implemented`, { responseStatus: 501 })
   }
 

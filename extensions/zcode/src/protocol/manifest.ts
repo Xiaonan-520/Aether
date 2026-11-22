@@ -136,6 +136,31 @@ export const MANIFEST: ExtensionManifest = {
             },
           },
         },
+        {
+          // 只读：把 auto-claim 的当前状态与最近一次结果暴露给 Core/Console。
+          // Claiming happens inside the extension on its own timer, so Core has
+          // no visibility otherwise; this action closes that gap without
+          // pretending the attempt was a Core-scheduled credit claim.
+          id: 'claim-status',
+          httpMethod: 'POST',
+          title: 'Claim status',
+          mode: 'read',
+          sideEffects: 'none',
+          ui: 'none',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account_id: { type: 'string', description: 'Opaque account id (optional; all accounts when omitted).' },
+            },
+          },
+          outputSchema: {
+            type: 'object',
+            properties: {
+              enabled: { type: 'boolean' },
+              accounts: { type: 'array' },
+            },
+          },
+        },
       ],
     },
   ],

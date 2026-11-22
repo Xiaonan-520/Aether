@@ -238,6 +238,45 @@ describe('ZCode quota', () => {
     expect(h.app.store.getQuotaCache(b)).toBeDefined()
   })
 
+  // Upstream's billing payload has no usage counter and no usage endpoint, so
+  // remaining is derived from the `usage` block each chat response carries.
+  // Before this, the Console card showed an empty quota for a healthy account.
+  it('derives remaining from the tokens the extension served', async () => {
+    const a = await login(h, 'zc-meter')
+    // A real chat turn meters its prompt+completion tokens.
+    const chatRes = await h.request('POST', '/v1/chat', {
+      accountId: a,
+      model: 'glm-5.2',
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: false,
+    })
+    expect(chatRes.status).toBe(200)
+
+    h.fake.behaviour.quotaPayload = {
+      plans: [{ status: 'active', ends_at: 1_900_000_000, entitlements: [{ grant_units: 1000 }] }],
+    }
+    const res = await h.request('GET', `/v1/accounts/${a}/quota`)
+    const body = (await res.json()) as {
+      resources: Array<{ remaining: number | null; total: number | null; status: string }>
+    }
+    const resource = body.resources[0]!
+    expect(resource.total).toBe(1000)
+    // The fake upstream reports 3 input + 2 output tokens per turn.
+    expect(resource.remaining).toBe(1000 - 5)
+    expect(resource.status).toBe('ok')
+  })
+
+  it('keeps remaining null when nothing has been metered yet', async () => {
+    const a = await login(h, 'zc-fresh')
+    h.fake.behaviour.quotaPayload = {
+      plans: [{ status: 'active', ends_at: 1_900_000_000, entitlements: [{ grant_units: 1000 }] }],
+    }
+    const res = await h.request('GET', `/v1/accounts/${a}/quota`)
+    const body = (await res.json()) as { resources: Array<{ remaining: number | null; total: number | null }> }
+    expect(body.resources[0]!.total).toBe(1000)
+    expect(body.resources[0]!.remaining).toBeNull()
+  })
+
   // Live trial/start-plan accounts answer with a plan list instead of flat
   // counters: { data: { plans: [{ status, ends_at, entitlements:
   // [{ grant_units }] }] } }. Parsing only flat fields made every such account

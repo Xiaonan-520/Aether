@@ -138,6 +138,14 @@ export interface ProviderOpsImpl {
    * `enabled=false` alone would leave the extension still routing to it.
    */
   setAccountEnabled?(ctx: ProviderCtx, account: Account, enabled: boolean): Promise<void>
+  /**
+   * Read the provider's own plan-claim status (remote extensions only).
+   *
+   * Some extensions claim trial campaigns on their own timer, so Core has no
+   * record of those attempts. Surfacing them lets the Console show what is
+   * actually happening instead of an empty claim history.
+   */
+  getClaimStatus?(ctx: ProviderCtx, account: Account): Promise<unknown>
   /** true when the upstream error is terminal for this account */
   mapError?(err: unknown): UpstreamError
 }

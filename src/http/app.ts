@@ -343,9 +343,13 @@ export function createGatewayApp(ctx: ServiceContext): GatewayApp {
   app.get('/api/console/providers/:id/quotas', (c) =>
     c.json({ quotas: consoleService.listProviderQuotas(c.req.param('id')) }),
   )
-  app.get('/api/console/providers/:id/claims', (c) => {
+  app.get('/api/console/providers/:id/claims', async (c) => {
     const limit = Number(c.req.query('limit') ?? 50)
-    return c.json({ claims: consoleService.listProviderClaims(c.req.param('id'), limit) })
+    // Core's own credit-claim jobs plus whatever the provider reports for
+    // plan claiming it performs on its own schedule.
+    const claims = consoleService.listProviderClaims(c.req.param('id'), limit)
+    const providerStatus = await consoleService.getProviderClaimStatus(c.req.param('id'))
+    return c.json({ claims, providerStatus })
   })
 
   // -- manual maintenance triggers (admin token) ----------------------------
