@@ -15,6 +15,7 @@
  */
 import type { AppConfig } from '../../util/config.js'
 import type { Logger } from '../../util/logger.js'
+import { randomUUID } from 'node:crypto'
 import type { Store, ZCodeCredentialRecord, AccountRow } from '../../storage/store.js'
 import { hasUsableCredential } from '../../storage/store.js'
 import type {
@@ -107,14 +108,27 @@ export class ZCodeProvider {
     verifyParam: string | null,
     captchaRegion?: string | null,
   ): Record<string, string> {
+    // Identity header set mirrors the live client's LLM source-headers builder
+    // (TriDefender/zcode-api `buildLlmIdentityHeaders`). The edge answers
+    // `3012 This client is not supported` when these do not look like official
+    // client traffic — a bare `ZCode/x.y.z` UA is enough to be rejected.
     const headers: Record<string, string> = {
       'content-type': 'application/json',
       ...authHeaders(credential),
       'anthropic-version': '2023-06-01',
-      'User-Agent': 'ZCode/3.0.1',
-      'X-ZCode-App-Version': '3.0.1',
-      'X-ZCode-Agent': 'glm',
       'HTTP-Referer': 'https://zcode.z.ai/',
+      'User-Agent': `${ZCODE_APP_UA} ${ANTHROPIC_SDK_UA}`,
+      'X-ZCode-App-Version': ZCODE_APP_VERSION,
+      'X-Title': 'Z Code@zcode',
+      'X-Release-Channel': 'production',
+      'X-Client-Language': 'en-US',
+      'X-Client-Timezone': 'Asia/Shanghai',
+      'X-ZCode-Agent': 'glm',
+      'X-Platform': `${process.platform}-${process.arch}`,
+      'X-Os-Category': osCategory(),
+      'x-request-id': randomUUID(),
+      'x-zcode-session-type': 'main',
+      'x-zcode-trace-id': randomUUID(),
     }
     if (verifyParam) {
       headers['X-Aliyun-Captcha-Verify-Param'] = verifyParam
@@ -685,4 +699,25 @@ function toProtocol(error: unknown): ProtocolError {  if (error instanceof Proto
 /** kv key holding an account's detected plan mode. */
 function planKey(accountId: string): string {
   return `plan:${accountId}`
+}
+
+// ── 客户端身份常量 ─────────────────────────────────────────
+/**
+ * Version the live client reports. The edge validates it: an outdated
+ * `ZCode/x.y.z` is treated as an unsupported client (3012). Code-pinned, like
+ * the reference bridge (`DEFAULT_APP_VERSION`), because it tracks the upstream
+ * client's releases rather than this project's.
+ */
+const ZCODE_APP_VERSION = '3.19.1'
+const ZCODE_APP_UA = `ZCode/${ZCODE_APP_VERSION}`
+/** SDK suffix the anthropic client merges into the UA on LLM calls. */
+const ANTHROPIC_SDK_UA = 'ai-sdk/anthropic/3.0.81'
+
+/** `X-Os-Category` value, mirroring the client's platform mapping. */
+function osCategory(): string {
+  switch (process.platform) {
+    case 'darwin': return 'macos'
+    case 'win32': return 'windows'
+    default: return process.platform === 'linux' ? 'linux' : 'unknown'
+  }
 }
