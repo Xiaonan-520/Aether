@@ -32,6 +32,35 @@ All require `Authorization: Bearer $GATEWAY_EXTENSION_TOKEN` except
 | GET | `/v1/captcha` | Official Aliyun widget page (human completes it) |
 | POST | `/v1/captcha` | Submit the human-completed `verify_param` |
 
+## Auto-claim (trial/weekend plans)
+
+ZCode distributes trial plans ("weekend build") through a first-come-first-served
+campaign: the account's JWT alone is not enough until the plan is **claimed**.
+Claiming runs automatically on a timer, one scheduler per account — ported from
+TriDefender/zcode-api's claim plane (CC BY-NC-SA 4.0).
+
+| Env | Default | Meaning |
+|---|---|---|
+| `ZCODE_AUTO_CLAIM` | on | `0` disables automated claiming |
+| `ZCODE_AUTO_CLAIM_PLAN_ID` | — | claim only this plan id (default: highest priority in the campaign) |
+| `ZCODE_AUTO_CLAIM_POLL_MS` | `300000` | preview poll interval (5 min, the reference default) |
+| `ZCODE_AUTO_CLAIM_COOLDOWN_MS` | `600000` | backoff after a transient failure |
+
+Two enumeration faces are merged: the billing preview
+(`GET /api/v1/zcode-plan/billing/preview`) and the marketing banner
+(`GET /api/v1/marketing/touch`, which needs a UUID `X-Device-Mid` — generated
+once per account and kept in the extension DB). Claims carry the captcha
+param+region pair from the solver, exactly like chat.
+
+Failure handling mirrors the reference scheduler: `already_claimed` /
+`quota_exhausted` hold until the plan's `ends_at`, transient failures back off
+for the cooldown, and `login_required` stops that account's scheduler. A
+missing captcha token is a retryable error — the extension never claims bare.
+
+Operators can claim once on demand via the `claim-plan` action
+(`POST /v1/actions/claim-plan`), which returns the raw outcome including the
+failure kind.
+
 ## Captcha: three modes
 
 `auto` is the default because start-plan (trial/weekend) accounts need a captcha

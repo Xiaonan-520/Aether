@@ -74,8 +74,11 @@ SOFTWARE.
   `provider/zcode/anthropic.ts`, the plan classification in
   `provider/zcode/plan.ts` and the captcha region header mirror its
   start-plan/coding-plan split, identity-block injection and captcha-retry
-  discipline. `zcode-system.json` records the official client's system-prompt
-  text, reproduced as protocol data rather than code.
+  discipline. `provider/zcode/claim/` (types, client, scheduler, runtime) is a
+  port of the upstream claim plane: the billing-preview and marketing-banner
+  enumeration, the claim call's header discipline, and the auto-claim backoff
+  state machine. `zcode-system.json` records the official client's
+  system-prompt text, reproduced as protocol data rather than code.
 - **Consequences:** CC BY-NC-SA 4.0 is a non-commercial license — the solver
   portions of this repository inherit it and **may not be used commercially**.
   ShareAlike applies to adaptations of those portions. This is a deliberate,

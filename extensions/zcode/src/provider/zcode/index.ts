@@ -31,6 +31,7 @@ import { ZCodeCaptchaManager, ZCodeCaptchaUnavailableError } from './captcha-sto
 import { CaptchaService } from './captcha-service.js'
 import type { Fetcher } from './upstream-auth.js'
 import { fetchQuotaRaw } from './upstream-quota.js'
+import type { AutoClaimRuntime } from './claim/runtime.js'
 import { anthropicEventToChunk, fromAnthropicResponse, toAnthropicBody, type ZCodePlan } from './anthropic.js'
 import { detectPlanFromBilling } from './plan.js'
 
@@ -67,6 +68,8 @@ export class ZCodeProvider {
   /** 登录轮询单飞（修复点 2）：同账号并发 GET 共享一次上游 poll */
   private readonly loginInFlight = new Map<string, Promise<void>>()
   private readonly captcha: ZCodeCaptchaManager
+  /** Optional: only present when `startApp` wired the claim runtime. */
+  private autoClaim: AutoClaimRuntime | undefined
   private readonly fetcher: Fetcher
 
   readonly captchaService: CaptchaService
@@ -93,6 +96,15 @@ export class ZCodeProvider {
     return this.captcha
   }
 
+  /** Wired by `startApp`; absent in tests that do not exercise claiming. */
+  setAutoClaim(runtime: AutoClaimRuntime): void {
+    this.autoClaim = runtime
+  }
+
+  getAutoClaim(): AutoClaimRuntime | undefined {
+    return this.autoClaim
+  }
+
   /** 请求结束（含长流式）后调用：刷新 auto 池的活跃时钟 */
   touchCaptcha(): void {
     this.captchaService.touch()
@@ -117,8 +129,8 @@ export class ZCodeProvider {
       ...authHeaders(credential),
       'anthropic-version': '2023-06-01',
       'HTTP-Referer': 'https://zcode.z.ai/',
-      'User-Agent': `${ZCODE_APP_UA} ${ANTHROPIC_SDK_UA}`,
-      'X-ZCode-App-Version': ZCODE_APP_VERSION,
+      'User-Agent': `ZCode/${this.appVersion()} ${ANTHROPIC_SDK_UA}`,
+      'X-ZCode-App-Version': this.appVersion(),
       'X-Title': 'Z Code@zcode',
       'X-Release-Channel': 'production',
       'X-Client-Language': 'en-US',
@@ -269,6 +281,22 @@ export class ZCodeProvider {
   private planOf(accountId: string): ZCodePlan {
     const stored = this.opts.store.kvGet(planKey(accountId))
     return stored === 'start-plan' ? 'start-plan' : 'coding-plan'
+  }
+
+  /** Client version the upstream sees; configurable so a bump needs no rebuild. */
+  private appVersion(): string {
+    return this.opts.config.appVersion
+  }
+
+  /**
+   * Captcha token for the claim plane (same gate the chat path uses).
+   * Throws when no token can be produced — the scheduler treats that as a
+   * `captcha` failure and backs off rather than claiming bare.
+   */
+  async getClaimCaptchaToken(): Promise<{ verifyParam: string; region?: string }> {
+    const token = await this.acquireCaptchaForStartPlan()
+    const region = this.captchaRegion()
+    return region ? { verifyParam: token, region } : { verifyParam: token }
   }
 
   async chat(req: ExtensionChatRequest, ctx: ChatRuntimeContext): Promise<ChatResult> {
@@ -464,6 +492,9 @@ export class ZCodeProvider {
     if (result.nickname) this.opts.store.setDisplayName(accountId, result.nickname)
     this.sessions.delete(accountId)
     this.opts.logger.info('login.success', { account_id: accountId })
+    // A freshly logged-in account has no claim yet; start its scheduler now
+    // rather than waiting for the next restart.
+    this.autoClaim?.startAccount(this.opts.store.getAccount(accountId)!)
   }
 
   /** import 模式：运维者直接粘贴 jwt_token / api_key（幂等，可覆盖） */
@@ -543,6 +574,7 @@ export class ZCodeProvider {
 
   async deleteAccount(accountId: string): Promise<void> {
     this.sessions.delete(accountId)
+    this.autoClaim?.stopAccount(accountId)
     this.opts.store.deleteAccount(accountId)
     this.opts.logger.info('account.delete', { account_id: accountId })
   }
@@ -703,14 +735,12 @@ function planKey(accountId: string): string {
 
 // ── 客户端身份常量 ─────────────────────────────────────────
 /**
- * Version the live client reports. The edge validates it: an outdated
- * `ZCode/x.y.z` is treated as an unsupported client (3012). Code-pinned, like
- * the reference bridge (`DEFAULT_APP_VERSION`), because it tracks the upstream
- * client's releases rather than this project's.
+ * SDK suffix the anthropic client merges into the UA on LLM calls.
+ *
+ * The app version itself is configuration (`ZCODE_APP_VERSION`, default in
+ * `util/config.ts`): the edge validates it and rejects outdated clients with
+ * 3012, so it must be bumpable without a rebuild.
  */
-const ZCODE_APP_VERSION = '3.19.1'
-const ZCODE_APP_UA = `ZCode/${ZCODE_APP_VERSION}`
-/** SDK suffix the anthropic client merges into the UA on LLM calls. */
 const ANTHROPIC_SDK_UA = 'ai-sdk/anthropic/3.0.81'
 
 /** `X-Os-Category` value, mirroring the client's platform mapping. */

@@ -49,7 +49,7 @@ Provider 分两类：**内置适配器**（编译进 Core）和 **Extension**（
 | workbuddy / workbuddycn | Extension（独立容器） | 浏览器授权 | 真实账号 E2E 验证，生产运行中 |
 | codebuddy | 内置 | 浏览器授权 | 真实账号 E2E 验证 |
 | buddy-intl | 内置 | 浏览器授权 | 真实账号 E2E 验证 |
-| zcode | Extension（`extensions/zcode`） | OAuth（CLI 两段式）或凭据导入 | 已迁移为 Extension 容器；自动识别 coding-plan / start-plan 并自动选路；CAPTCHA 默认自动求解（`ZCODE_CAPTCHA_MODE=auto`），见下文 |
+| zcode | Extension（`extensions/zcode`） | OAuth（CLI 两段式）或凭据导入 | 已迁移为 Extension 容器；自动识别 coding-plan / start-plan 并自动选路；CAPTCHA 默认自动求解；试用/周末套餐**自动领取**（auto-claim），见下文 |
 | qoder / qoder-cn | 内置 | device code | 登录/模型/额度可用；聊天依赖客户端 WASM，见下文 |
 | lobsterai / cline / trae / trae-intl / codearts / loomy / raccoon | Extension（`src/extensions/`） | 各异（WorkOS 设备码、短信、微信扫码、PKCE+DPoP 等） | 已迁移为 Extension 容器，各有 E2E 测试 |
 
@@ -71,6 +71,10 @@ ZCode 有 `coding-plan` 和 `start-plan`（试用/周末包）两种账号。两
 - **auto（默认）**：`src/solver/` 内置 happy-dom 求解器（移植自 [TriDefender/zcode-api](https://github.com/TriDefender/zcode-api)，CC BY-NC-SA 4.0）——固定指纹、网络层接管、严格结果校验、令牌池、CPU 治理；start-plan 账号在发请求前就预先求解。
 - `manual`：检测到挑战后，扩展在 `GET /v1/captcha` 提供官方验证码组件给人工完成，token 提交回扩展（单飞等待：在飞请求在提交瞬间全部恢复）。
 - `off`：不发送任何验证码头（仅 coding-plan 可用；start-plan 会如实返回 NEEDS_CAPTCHA）。
+
+#### 试用套餐自动领取（auto-claim）
+
+ZCode 的试用/周末套餐按"先到先得"发放，账号光有 JWT 还不够，必须**领取（claim）**才生效。扩展默认开启自动领取：每个账号一个调度器，默认每 5 分钟轮询活动（`ZCODE_AUTO_CLAIM_POLL_MS`），发现可领套餐立刻用 solver 产生的 captcha 令牌去领；`already_claimed` / `quota_exhausted` 会挂起到套餐 `ends_at`，瞬时失败按 `ZCODE_AUTO_CLAIM_COOLDOWN_MS` 退避，`login_required` 停止该账号的调度。`ZCODE_AUTO_CLAIM=0` 可整体关闭；运维也可用 `POST /v1/actions/claim-plan` 手动领取一次并查看失败原因。
 
 Core 不再持有任何 zcode captcha 状态——旧的 `/captcha/zcode` 页面与 `/api/accounts/zcode/captcha` 提交端点已随迁移移入扩展。
 
