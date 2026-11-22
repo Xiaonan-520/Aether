@@ -291,8 +291,23 @@ export function quotaSnapshotV1ToLegacy(v1: QuotaSnapshotV1 | null): Pick<QuotaS
   if (!v1 || v1.resources.length === 0) {
     return { known: false, remaining: null, total: null, resetAt: null }
   }
-  const routable = v1.resources.filter((r) => r.kind !== 'custom' && r.remaining !== null)
-  if (routable.length === 0) return { known: false, remaining: null, total: null, resetAt: null }
+  const nonCustom = v1.resources.filter((r) => r.kind !== 'custom')
+  const routable = nonCustom.filter((r) => r.remaining !== null)
+  // Providers whose upstream reports only a grant (no consumption counter) know
+  // the total but not what is left. That is still useful information — dropping
+  // the resource entirely made the Console show an empty card for a perfectly
+  // healthy account — so fall back to the first resource that has *something*
+  // to report, keeping `remaining` null rather than inventing a number.
+  if (routable.length === 0) {
+    const withTotal = nonCustom.find((r) => r.total !== null || r.status !== 'unknown')
+    if (!withTotal) return { known: false, remaining: null, total: null, resetAt: null }
+    return {
+      known: true,
+      remaining: null,
+      total: withTotal.total,
+      resetAt: withTotal.resetAt ? Date.parse(withTotal.resetAt) : null,
+    }
+  }
   const scarcest = routable.reduce((a, b) => {
     const ra = a.total !== null && a.total > 0 ? (a.remaining ?? 0) / a.total : 1
     const rb = b.total !== null && b.total > 0 ? (b.remaining ?? 0) / b.total : 1
@@ -332,7 +347,15 @@ export function buildRemoteProviders(reg: RemoteProviderRegistration): Provider[
     throw new Error(`invalid extension manifest: ${detail}`)
   }
   const client = new RemoteExtensionClient({ endpoints: reg.endpoints, fetch: reg.fetch })
-  return reg.manifest.providers.map((entry) => new RemoteProvider(entry.id, entry.displayName, entry.capabilities, entry.authAction, client, entry.quotaResources))
+  return reg.manifest.providers.map((entry) => new RemoteProvider(
+    entry.id,
+    entry.displayName,
+    entry.capabilities,
+    entry.authAction,
+    client,
+    entry.quotaResources,
+    new Set((entry.actions ?? []).map((action) => action.id)),
+  ))
 }
 
 /**
@@ -355,6 +378,8 @@ export class RemoteProvider implements Provider {
     private readonly authActionId: string | undefined,
     private readonly client: RemoteExtensionClient,
     private readonly quotaDeclaration: QuotaResourceDeclaration[] | undefined,
+    /** Action ids the manifest declares, so optional bridges can gate on them. */
+    private readonly declaredActions: ReadonlySet<string> = new Set(),
   ) {
     this.id = providerId
     this.displayName = displayName
@@ -465,6 +490,13 @@ export class RemoteProvider implements Provider {
       // Core's local flag is not enough: mirror the operator's decision there.
       async setAccountEnabled(_ctx: ProviderCtx, account: Account, enabled: boolean): Promise<void> {
         await client.setAccountEnabled(account.id, enabled)
+      },
+      // Claiming may happen on the extension's own timer; report its view so
+      // the Console is not blind to it. Undeclared action → undefined.
+      async getClaimStatus(_ctx: ProviderCtx, account: Account): Promise<unknown> {
+        if (!declaredActions.has('claim-status')) return undefined
+        const res = await client.invokeAction({ actionId: 'claim-status', accountId: account.id })
+        return res.result
       },
     }
 

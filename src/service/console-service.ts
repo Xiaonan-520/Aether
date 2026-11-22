@@ -227,6 +227,38 @@ export class ConsoleService {
     return jobs as unknown as Array<Record<string, unknown>>
   }
 
+  /**
+   * Plan-claim status reported by the provider itself.
+   *
+   * Extensions that claim trial campaigns on their own timer never write Core's
+   * `credit_claim` jobs, so the Console's claim card used to stay empty for a
+   * perfectly working provider. Returns one entry per account with whatever the
+   * provider knows (last outcome, hold window); providers without the seam
+   * return an empty list and the Console keeps its job-based view.
+   */
+  async getProviderClaimStatus(id: string): Promise<Array<Record<string, unknown>>> {
+    this.requireProvider(id)
+    const adapter = this.ctx.registry.get(id)
+    if (!adapter?.ops.getClaimStatus) return []
+    const rows: Array<Record<string, unknown>> = []
+    for (const stored of this.ctx.store.listAccounts(id)) {
+      try {
+        const status = await adapter.ops.getClaimStatus(
+          { provider: id, resolveCredential: async () => undefined },
+          stored.account,
+        )
+        if (status === undefined) continue
+        rows.push({ accountId: stored.account.id, status })
+      } catch (err) {
+        rows.push({
+          accountId: stored.account.id,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+    return rows
+  }
+
   private claimsToday(): { success: number; failed: number } {
     const events = this.ctx.store.listEvents(200)
     let success = 0

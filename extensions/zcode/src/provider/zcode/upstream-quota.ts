@@ -24,10 +24,19 @@ export interface QuotaFetchResult {
   billing: Record<string, unknown> | null
 }
 
+/**
+ * @param usedTokens tokens this extension has metered for the account since the
+ *   plan started. Upstream's billing payload reports only the grant
+ *   (`grant_units`) and exposes no counter or usage endpoint, so remaining is
+ *   derived locally from the `usage` block every chat response carries.
+ *   `null` means "not metered yet" — remaining then stays null rather than
+ *   pretending the whole grant is untouched.
+ */
 export async function fetchQuotaRaw(
   credential: ZCodeCredential,
   fetcher: Fetcher = fetch,
   apiBase: string = ZCODE_API_BASE,
+  usedTokens: number | null = null,
 ): Promise<QuotaFetchResult> {
   const headers = { 'Content-Type': 'application/json', ...authHeaders(credential) }
   const now = Date.now()
@@ -50,9 +59,17 @@ export async function fetchQuotaRaw(
     // grant is reported as the *total* and remaining stays null — never derive
     // remaining from the grant (that would claim untouched quota we cannot see).
     const planTotals = sumPlanGrants(data)
-    const remaining = firstNumber(data, ['remaining', 'available', 'left', 'balance'])
+    const upstreamRemaining = firstNumber(data, ['remaining', 'available', 'left', 'balance'])
     const total = firstNumber(data, ['total', 'quota', 'limit']) ?? planTotals.total
     const resetAt = firstNumber(data, ['resetAt', 'reset_at', 'expireAt', 'expires_at']) ?? planTotals.resetAt
+    // Prefer the upstream counter when it exists; otherwise derive from the
+    // locally metered usage against the grant. Never below zero, and never
+    // guessed when nothing has been metered yet.
+    const remaining = upstreamRemaining !== null
+      ? upstreamRemaining
+      : total !== null && usedTokens !== null
+        ? Math.max(0, total - usedTokens)
+        : null
     return {
       known: remaining !== null || total !== null,
       remaining,

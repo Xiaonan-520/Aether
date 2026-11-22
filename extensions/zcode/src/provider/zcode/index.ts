@@ -267,6 +267,33 @@ export class ZCodeProvider {
     }
   }
 
+  // ── usage metering ────────────────────────────────────
+  /**
+   * Add the tokens one chat response reported to the account's ledger.
+   *
+   * Upstream's billing payload exposes only the plan grant and there is no
+   * usage endpoint, so remaining quota is derived from what this extension
+   * actually served. Entries are keyed per plan window (`ends_at`) so a new
+   * campaign starts from zero instead of inheriting the previous window's spend.
+   */
+  private recordUsage(accountId: string, usage: { promptTokens?: number; completionTokens?: number } | undefined): void {
+    const total = (usage?.promptTokens ?? 0) + (usage?.completionTokens ?? 0)
+    if (!Number.isFinite(total) || total <= 0) return
+    const key = usageKey(accountId)
+    const previous = Number(this.opts.store.kvGet(key) ?? '0')
+    const next = (Number.isFinite(previous) ? previous : 0) + total
+    this.opts.store.kvSet(key, String(next))
+    this.opts.logger.info('usage.metered', { account_id: accountId, tokens: total, total: next })
+  }
+
+  /** Tokens metered for the account's current plan window, or null if none yet. */
+  private meteredUsage(accountId: string): number | null {
+    const raw = this.opts.store.kvGet(usageKey(accountId))
+    if (raw === undefined || raw === '') return null
+    const value = Number(raw)
+    return Number.isFinite(value) ? value : null
+  }
+
   /** 当前 captcha region：环境变量覆盖优先，否则用缓存值/内置默认值。 */
   private captchaRegion(): string | null {
     if (this.opts.config.captchaRegion) return this.opts.config.captchaRegion
@@ -310,7 +337,9 @@ export class ZCodeProvider {
       } catch {
         throw errors.emptyResponse('zcode: non-JSON response body')
       }
-      return fromAnthropicResponse(payload)
+      const result = fromAnthropicResponse(payload)
+      this.recordUsage(ctx.accountId, result.usage)
+      return result
     } catch (err) {
       throw toProtocol(err)
     }
@@ -348,6 +377,9 @@ export class ZCodeProvider {
                 const chunk = anthropicEventToChunk(event)
                 if (chunk) {
                   if (chunk.finishReason) sawFinish = true
+                  // Streamed turns report usage on the final event; meter it
+                  // exactly like a non-streaming response.
+                  if (chunk.usage) this.recordUsage(ctx.accountId, chunk.usage)
                   yield chunk
                 }
               } catch (err) {
@@ -558,7 +590,7 @@ export class ZCodeProvider {
     }
     // 用配额端点做一次轻量健康检查（不改变凭据）
     try {
-      const quota = await fetchQuotaRaw(credential, this.fetcher, this.apiBase)
+      const quota = await fetchQuotaRaw(credential, this.fetcher, this.apiBase, this.meteredUsage(accountId))
       const status: AccountStatus = 'active'
       this.opts.store.setAccountStatus(accountId, status)
       return { status, refreshed: false, error: null }
@@ -618,7 +650,7 @@ export class ZCodeProvider {
     if (!credential || !hasUsableCredential(credential)) {
       throw errors.authInvalid(`account ${accountId} has no usable credential`)
     }
-    const raw = await fetchQuotaRaw(credential, this.fetcher, this.apiBase)
+    const raw = await fetchQuotaRaw(credential, this.fetcher, this.apiBase, this.meteredUsage(accountId))
     // The billing payload is also the only authoritative source for the
     // account's plan mode; persist it so chat requests can shape themselves
     // without paying for a billing round-trip.
@@ -731,6 +763,14 @@ function toProtocol(error: unknown): ProtocolError {  if (error instanceof Proto
 /** kv key holding an account's detected plan mode. */
 function planKey(accountId: string): string {
   return `plan:${accountId}`
+}
+
+/**
+ * kv key holding the tokens this extension served for an account. Scoped by
+ * the current plan window so a new campaign starts fresh.
+ */
+function usageKey(accountId: string): string {
+  return `usage:tokens:${accountId}`
 }
 
 // ── 客户端身份常量 ─────────────────────────────────────────
