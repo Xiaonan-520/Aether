@@ -68,6 +68,20 @@ export class ZCodeCaptchaManager {
     return this.configCache.get()
   }
 
+  /**
+   * Synchronous region for the request header.
+   *
+   * The start-plan edge validates `x-aliyun-captcha-verify-param` together with
+   * `x-aliyun-captcha-verify-region`; a param without its region is a shape no
+   * real client produces. A chat request cannot await a config fetch, and the
+   * legacy `client/configs` endpoint now answers 3001 for every query, so this
+   * resolves to the operator override when set and the built-in default
+   * otherwise (`sgp`, the region the client ships with).
+   */
+  region(): string {
+    return this.configCache.peekRegion() ?? DEFAULT_CAPTCHA_CONFIG.region
+  }
+
   /** 取缓存令牌；无有效令牌时抛 needs_manual_action —— 绝不伪造。 */
   getToken(): string {
     const cached = this.peek()

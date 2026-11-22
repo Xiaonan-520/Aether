@@ -79,8 +79,8 @@ services:
 
   gateway-extension-zcode-build:
     # ZCode extension (provider id: zcode). Captcha modes via ZCODE_CAPTCHA_MODE:
-    # manual (default; human handoff) | auto (happy-dom solver; ToS risk with
-    # the deployer) | off. Install via the Extension Manager (install-from-image)
+    # auto (default; happy-dom solver — start-plan accounts need a token on every
+    # request) | manual (human handoff) | off. Install via the Extension Manager (install)
     # or the Console. Built locally like the fake extension above.
     image: local/gateway-extension-zcode:1.0.0
     build:

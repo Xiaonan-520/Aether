@@ -30,7 +30,8 @@ import { ZCodeCaptchaManager, ZCodeCaptchaUnavailableError } from './captcha-sto
 import { CaptchaService } from './captcha-service.js'
 import type { Fetcher } from './upstream-auth.js'
 import { fetchQuotaRaw } from './upstream-quota.js'
-import { anthropicEventToChunk, fromAnthropicResponse, toAnthropicBody } from './anthropic.js'
+import { anthropicEventToChunk, fromAnthropicResponse, toAnthropicBody, type ZCodePlan } from './anthropic.js'
+import { detectPlanFromBilling } from './plan.js'
 
 export interface ProviderOptions {
   config: AppConfig
@@ -101,7 +102,11 @@ export class ZCodeProvider {
   }
 
   // ── 上游请求（Anthropic Messages）──────────────────────
-  private chatHeaders(credential: ZCodeCredentialRecord, verifyParam: string | null): Record<string, string> {
+  private chatHeaders(
+    credential: ZCodeCredentialRecord,
+    verifyParam: string | null,
+    captchaRegion?: string | null,
+  ): Record<string, string> {
     const headers: Record<string, string> = {
       'content-type': 'application/json',
       ...authHeaders(credential),
@@ -111,7 +116,12 @@ export class ZCodeProvider {
       'X-ZCode-Agent': 'glm',
       'HTTP-Referer': 'https://zcode.z.ai/',
     }
-    if (verifyParam) headers['X-Aliyun-Captcha-Verify-Param'] = verifyParam
+    if (verifyParam) {
+      headers['X-Aliyun-Captcha-Verify-Param'] = verifyParam
+      // The start-plan edge validates the pair: a verify-param without its
+      // region is a shape no real client produces.
+      if (captchaRegion) headers['X-Aliyun-Captcha-Verify-Region'] = captchaRegion
+    }
     return headers
   }
 
@@ -125,12 +135,13 @@ export class ZCodeProvider {
     req: ExtensionChatRequest,
     upstreamModel: string,
     verifyParam: string | null,
+    plan: ZCodePlan,
     signal?: AbortSignal,
   ): Promise<Response> {
     const response = await this.fetcher(upstreamFor(credential, this.apiBase), {
       method: 'POST',
-      headers: this.chatHeaders(credential, verifyParam),
-      body: JSON.stringify(toAnthropicBody(req, upstreamModel)),
+      headers: this.chatHeaders(credential, verifyParam, verifyParam ? this.captchaRegion() : null),
+      body: JSON.stringify(toAnthropicBody(req, upstreamModel, plan)),
       ...(signal ? { signal } : {}),
     })
     if (!response.ok) {
@@ -145,19 +156,25 @@ export class ZCodeProvider {
   }
 
   /**
-   * 完整重试流（与内置适配器 sendWithRetry 同构）：
-   * 第一次带缓存令牌（可能根本没有 —— 条件验证码）；
-   * 被拒后 invalidate → 人工交接 → 一次重试。
-   * 人工交接走 waitForToken 单飞等待：运维者在授权页提交后所有并发请求立即恢复。
+   * 完整重试流：
+   * - coding-plan：条件验证码 —— 先带缓存令牌（可能没有），被挑战后再补。
+   * - start-plan：每一发都必须带令牌（裸发是真实客户端永不产生的形态，
+   *   edge 直接判非官方客户端），因此**先取令牌再发**，取不到就有界重试后
+   *   诚实报错，绝不裸发。
+   * 被拒后 invalidate → 重新取（auto 求解 / manual 等待人工）。
    */
   private async sendWithRetry(
     credential: ZCodeCredentialRecord,
     req: ExtensionChatRequest,
     upstreamModel: string,
+    plan: ZCodePlan,
     signal?: AbortSignal,
   ): Promise<Response> {
     let verifyParam: string | null = null
-    if (this.captchaService.mode === 'auto') {
+    if (plan === 'start-plan') {
+      // start-plan：令牌是承重结构，不可降级为裸发。
+      verifyParam = await this.acquireCaptchaForStartPlan()
+    } else if (this.captchaService.mode === 'auto') {
       try {
         verifyParam = await this.captchaService.acquire()
       } catch {
@@ -168,7 +185,7 @@ export class ZCodeProvider {
       verifyParam = this.captcha.peek()
     }
     try {
-      return await this.postMessages(credential, req, upstreamModel, verifyParam, signal)
+      return await this.postMessages(credential, req, upstreamModel, verifyParam, plan, signal)
     } catch (err) {
       if (!(err instanceof ZCodeCaptchaUnavailableError)) throw err
       // 挑战重试的令牌来源按模式分流：
@@ -193,15 +210,58 @@ export class ZCodeProvider {
           )
         }
       }
-      return this.postMessages(credential, req, upstreamModel, fresh, signal)
+      return this.postMessages(credential, req, upstreamModel, fresh, plan, signal)
     }
+  }
+
+  /**
+   * start-plan 的令牌获取：优先自动求解，其次是缓存/人工交接。
+   *
+   * 自动求解在此路径默认开启（`ZCODE_CAPTCHA_MODE=off` 才关闭），因为
+   * start-plan 没有"裸发"这个合法降级形态 —— 没有令牌就没有请求。
+   */
+  private async acquireCaptchaForStartPlan(): Promise<string> {
+    if (this.captchaService.mode !== 'off') {
+      try {
+        return await this.captchaService.acquire()
+      } catch (err) {
+        this.opts.logger.warn('captcha.start_plan.acquire_failed', { error: (err as Error).message })
+      }
+    }
+    const cached = this.captcha.peek()
+    if (cached) return cached
+    // 最后一条路：等人工在 /v1/captcha 提交（manual 部署与求解失败时的兜底）。
+    const budget = Math.max(1, Math.min(this.opts.config.captchaWaitMs, 60_000))
+    try {
+      return await this.captcha.waitForToken(budget)
+    } catch {
+      throw errors.needsCaptcha(
+        'start-plan requires a captcha token on every request; complete the verification at GET /v1/captcha and retry',
+      )
+    }
+  }
+
+  /** 当前 captcha region：环境变量覆盖优先，否则用缓存值/内置默认值。 */
+  private captchaRegion(): string | null {
+    if (this.opts.config.captchaRegion) return this.opts.config.captchaRegion
+    return this.captcha.region()
+  }
+
+  /**
+   * Account's plan mode. Cached from the last billing refresh; unknown accounts
+   * default to coding-plan (the historically supported mode) so a first request
+   * never waits on a billing call.
+   */
+  private planOf(accountId: string): ZCodePlan {
+    const stored = this.opts.store.kvGet(planKey(accountId))
+    return stored === 'start-plan' ? 'start-plan' : 'coding-plan'
   }
 
   async chat(req: ExtensionChatRequest, ctx: ChatRuntimeContext): Promise<ChatResult> {
     const credential = this.requireCredential(ctx.accountId)
     const upstreamModel = MODEL_NAME_MAP[bareModel(req.model)] ?? bareModel(req.model)
     try {
-      const response = await this.sendWithRetry(credential, { ...req, stream: false }, upstreamModel, ctx.signal)
+      const response = await this.sendWithRetry(credential, { ...req, stream: false }, upstreamModel, this.planOf(ctx.accountId), ctx.signal)
       let payload: Record<string, unknown>
       try {
         payload = (await response.json()) as Record<string, unknown>
@@ -219,7 +279,7 @@ export class ZCodeProvider {
     const upstreamModel = MODEL_NAME_MAP[bareModel(req.model)] ?? bareModel(req.model)
     let response: Response
     try {
-      response = await this.sendWithRetry(credential, { ...req, stream: true }, upstreamModel, ctx.signal)
+      response = await this.sendWithRetry(credential, { ...req, stream: true }, upstreamModel, this.planOf(ctx.accountId), ctx.signal)
     } catch (err) {
       throw toProtocol(err)
     }
@@ -513,6 +573,11 @@ export class ZCodeProvider {
       throw errors.authInvalid(`account ${accountId} has no usable credential`)
     }
     const raw = await fetchQuotaRaw(credential, this.fetcher, this.apiBase)
+    // The billing payload is also the only authoritative source for the
+    // account's plan mode; persist it so chat requests can shape themselves
+    // without paying for a billing round-trip.
+    const detected = detectPlanFromBilling(raw.billing)
+    if (detected) this.opts.store.kvSet(planKey(accountId), detected)
     const snapshot: QuotaSnapshotV1 = {
       accountId,
       checkedAt: new Date(raw.lastUpdatedAt).toISOString(),
@@ -608,12 +673,16 @@ async function toUpstreamError(response: Response): Promise<ProtocolError> {
   return errors.terminal(`zcode HTTP ${response.status}: ${text}`, { httpStatus: response.status })
 }
 
-function toProtocol(error: unknown): ProtocolError {
-  if (error instanceof ProtocolError) return error
+function toProtocol(error: unknown): ProtocolError {  if (error instanceof ProtocolError) return error
   if (error instanceof ZCodeCaptchaUnavailableError) {
     return errors.needsCaptcha(`zcode requires a captcha token (${error.kind}); complete the verification at GET /v1/captcha and submit it`)
   }
   const message = error instanceof Error ? error.message : String(error)
   if (/timeout|abort/i.test(message)) return errors.timeout(message)
   return errors.transport(message)
+}
+
+/** kv key holding an account's detected plan mode. */
+function planKey(accountId: string): string {
+  return `plan:${accountId}`
 }

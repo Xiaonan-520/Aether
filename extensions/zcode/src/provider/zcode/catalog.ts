@@ -19,6 +19,9 @@ export const ZCODE_QUOTA = {
 } as const
 
 export const ZCODE_MODELS: ReadonlyArray<{ id: string; name: string }> = [
+  // start-plan (trial/weekend) accounts are entitled to this one only; the
+  // coding-plan family below is rejected with 3006 on such accounts.
+  { id: 'glm-5.3-flash', name: 'GLM-5.3 Flash' },
   { id: 'glm-5.2', name: 'GLM-5.2' },
   { id: 'glm-5.1', name: 'GLM-5.1' },
   { id: 'glm-5-turbo', name: 'GLM-5 Turbo' },
@@ -27,6 +30,7 @@ export const ZCODE_MODELS: ReadonlyArray<{ id: string; name: string }> = [
 
 /** 上游对模型名大小写敏感 */
 export const MODEL_NAME_MAP: Readonly<Record<string, string>> = {
+  'glm-5.3-flash': 'GLM-5.3-Flash',
   'glm-5.2': 'GLM-5.2',
   'glm-5.1': 'GLM-5.1',
   'glm-5-turbo': 'GLM-5-Turbo',

@@ -49,19 +49,28 @@ Provider 分两类：**内置适配器**（编译进 Core）和 **Extension**（
 | workbuddy / workbuddycn | Extension（独立容器） | 浏览器授权 | 真实账号 E2E 验证，生产运行中 |
 | codebuddy | 内置 | 浏览器授权 | 真实账号 E2E 验证 |
 | buddy-intl | 内置 | 浏览器授权 | 真实账号 E2E 验证 |
-| zcode | Extension（`extensions/zcode`） | OAuth（CLI 两段式）或凭据导入 | 已迁移为 Extension 容器；CAPTCHA 人工交接（默认）或 happy-dom 自动求解（`ZCODE_CAPTCHA_MODE=auto`，风险自担），见下文 |
+| zcode | Extension（`extensions/zcode`） | OAuth（CLI 两段式）或凭据导入 | 已迁移为 Extension 容器；自动识别 coding-plan / start-plan 并自动选路；CAPTCHA 默认自动求解（`ZCODE_CAPTCHA_MODE=auto`），见下文 |
 | qoder / qoder-cn | 内置 | device code | 登录/模型/额度可用；聊天依赖客户端 WASM，见下文 |
 | lobsterai / cline / trae / trae-intl / codearts / loomy / raccoon | Extension（`src/extensions/`） | 各异（WorkOS 设备码、短信、微信扫码、PKCE+DPoP 等） | 已迁移为 Extension 容器，各有 E2E 测试 |
 
 状态按账号标注在 `/v1/models`（`available` 字段）和管理 API 里。表格反映的是当前开发状态，不是兼容性承诺——没有用真实账号长期跑过的 Provider 不会标"已验证"。
 
-### ZCode 的 CAPTCHA 策略
+### ZCode 的 plan 与 CAPTCHA 策略
 
-ZCode 上游偶尔要求阿里云验证码。策略由 `extensions/zcode` 的 `ZCODE_CAPTCHA_MODE` 决定：
+ZCode 有 `coding-plan` 和 `start-plan`（试用/周末包）两种账号。两者的上游路径相同但请求形态不同，扩展会**从 billing 的 `plans[]` 自动识别**并缓存到账号上，随后的聊天请求自动按对应形态发出：
 
-- **manual（默认）**：检测到挑战后，扩展在 `GET /v1/captcha` 提供官方验证码组件给人工完成，token 提交回扩展（单飞等待：在飞请求在提交瞬间全部恢复）。**没有自动打码、没有绕过、没有浏览器指纹伪造**。拿不到有效 token 时账号挂 `needs_manual_action`，账号池自动跳过。
-- **auto（显式开启）**：`src/solver/` 内置 happy-dom 求解器（移植自 [TriDefender/zcode-api](https://github.com/TriDefender/zcode-api)，CC BY-NC-SA 4.0）——固定指纹、网络层接管、严格结果校验、令牌池、CPU 治理。**这是绕过风控的自动化行为，违反上游 ToS 的可能性极高，且该部分代码不可商用**；由部署者自行评估并承担。
-- `off`：不发送任何验证码头。
+| plan | 请求形态 |
+| --- | --- |
+| `coding-plan` | 裸 Anthropic Messages；被挑战时才补验证码 |
+| `start-plan` | 注入 ZCode 身份 system 块 + 日期附件 + `metadata.user_id`；**每一发都带验证码**（裸发会被上游判为非官方客户端） |
+
+模型目录同时包含两边：`glm-5.3-flash`（start-plan 授权）与 `glm-5.2 / 5.1 / 5-turbo / 4.7`（coding-plan）。被上游按套餐拒绝时会如实返回 `3006 model not allowed`。
+
+验证码策略由 `extensions/zcode` 的 `ZCODE_CAPTCHA_MODE` 决定：
+
+- **auto（默认）**：`src/solver/` 内置 happy-dom 求解器（移植自 [TriDefender/zcode-api](https://github.com/TriDefender/zcode-api)，CC BY-NC-SA 4.0）——固定指纹、网络层接管、严格结果校验、令牌池、CPU 治理；start-plan 账号在发请求前就预先求解。
+- `manual`：检测到挑战后，扩展在 `GET /v1/captcha` 提供官方验证码组件给人工完成，token 提交回扩展（单飞等待：在飞请求在提交瞬间全部恢复）。
+- `off`：不发送任何验证码头（仅 coding-plan 可用；start-plan 会如实返回 NEEDS_CAPTCHA）。
 
 Core 不再持有任何 zcode captcha 状态——旧的 `/captcha/zcode` 页面与 `/api/accounts/zcode/captcha` 提交端点已随迁移移入扩展。
 
@@ -329,7 +338,7 @@ docker pull ghcr.io/xiaonan-520/multi-provider-ai-gateway:latest
 | --- | --- | --- | --- |
 | deepseek-harness-codearts ("jet-hub") | [gitee.com/iJetLi/deepseek-harness-codearts](https://gitee.com/iJetLi/deepseek-harness-codearts) | MIT | 改编代码（Provider 协议/签名材料、Qoder WASM 对接）+ 架构参考 |
 | deepseek-harness | [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) | MIT | 架构参考；未包含其源码 |
-| zcode-api | [github.com/TriDefender/zcode-api](https://github.com/TriDefender/zcode-api) | CC BY-NC-SA 4.0 | `extensions/zcode/src/solver/`（`ZCODE_CAPTCHA_MODE=auto` 的 happy-dom 求解器）的架构移植来源；manual 默认路径不包含其代码。auto 部分**不可商用** |
+| zcode-api | [github.com/TriDefender/zcode-api](https://github.com/TriDefender/zcode-api) | CC BY-NC-SA 4.0 | `extensions/zcode/src/solver/`（happy-dom 求解器）与 `start-plan` 请求形态（`system-prompt.ts`、身份头/请求体改写）的移植来源。相关部分**不可商用**，具体见 THIRD-PARTY-NOTICES |
 | Qoder 客户端 `qoder-auth-wasm.wasm` | — | 专有 | 不分发。仅当运维者自备副本时在运行时加载 |
 
 完整署名（含 jet-hub 的 MIT 声明文本）见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。

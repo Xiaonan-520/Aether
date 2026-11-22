@@ -32,13 +32,21 @@ All require `Authorization: Bearer $GATEWAY_EXTENSION_TOKEN` except
 | GET | `/v1/captcha` | Official Aliyun widget page (human completes it) |
 | POST | `/v1/captcha` | Submit the human-completed `verify_param` |
 
-## Captcha: two modes
+## Captcha: three modes
 
-| `ZCODE_CAPTCHA_MODE` | Behavior | Compliance |
-|---|---|---|
-| `manual` (**default**) | Cached human token; challenge parks requests on a single-flight wait until an operator submits via `POST /v1/captcha` | No automation |
-| `auto` | happy-dom solver (`src/solver/`, ported from TriDefender/zcode-api) solves challenges against the real Aliyun SDK: fixed fingerprint, network-layer interception, `isTrusted` patch, token pool, bounded retry, CPU governor | **Bypasses risk control — likely violates upstream ToS; ported code is CC BY-NC-SA 4.0 → this mode's portions are non-commercial** |
-| `off` | Never sends captcha headers | — |
+`auto` is the default because start-plan (trial/weekend) accounts need a captcha
+token on **every** request — a bare request is rejected upstream as a
+non-official client (3012). coding-plan accounts only need one after a
+challenge.
+
+| `ZCODE_CAPTCHA_MODE` | Behavior |
+|---|---|
+| `auto` (**default**) | happy-dom solver (`src/solver/`, ported from TriDefender/zcode-api) solves challenges against the real Aliyun SDK: fixed fingerprint, network-layer interception, `isTrusted` patch, token pool, bounded retry, CPU governor. Solves ahead of time on start-plan accounts |
+| `manual` | Cached human token; a request that needs one parks on a single-flight wait until an operator submits via `POST /v1/captcha` |
+| `off` | Never sends captcha headers (coding-plan only — start-plan requests then fail honestly with NEEDS_CAPTCHA) |
+
+The solver portions are **non-commercial** under CC BY-NC-SA 4.0 (see
+`THIRD-PARTY-NOTICES.md`).
 
 ### auto mode internals (`src/solver/`)
 

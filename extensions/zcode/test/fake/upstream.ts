@@ -44,6 +44,8 @@ export class FakeZCode {
   chatAuthorizations: string[] = []
   /** chat 请求体（anthropic 形态） */
   lastChatBody?: Record<string, unknown>
+  /** chat 请求头（captcha region 等断言用） */
+  lastChatHeaders?: Record<string, string | string[] | undefined>
   /** poll 调用次数（单飞断言） */
   pollCalls = 0
   /** init 调用次数 */
@@ -181,6 +183,7 @@ export class FakeZCode {
   private async handleChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const authHeader = req.headers.authorization ?? ''
     this.chatAuthorizations.push(authHeader)
+    this.lastChatHeaders = { ...req.headers } as Record<string, string | string[] | undefined>
     const chunks: Buffer[] = []
     for await (const c of req) chunks.push(c as Buffer)
     try {

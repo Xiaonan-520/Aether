@@ -38,8 +38,11 @@ function intEnv(name: string, fallback: number): number {
 }
 
 function parseCaptchaMode(raw: string | undefined): 'manual' | 'auto' | 'off' {
-  const value = String(raw ?? 'manual').toLowerCase()
-  return value === 'auto' ? 'auto' : value === 'off' ? 'off' : 'manual'
+  // auto is the default: start-plan accounts need a captcha token on every
+  // request (a bare request is rejected as a non-official client), so solving
+  // has to be on out of the box. Operators opt out with manual/off.
+  const value = String(raw ?? 'auto').toLowerCase()
+  return value === 'manual' ? 'manual' : value === 'off' ? 'off' : 'auto'
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {

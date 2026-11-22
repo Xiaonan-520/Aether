@@ -17,6 +17,11 @@ export interface QuotaFetchResult {
   resetAt: number | null
   lastUpdatedAt: number
   rawJson: string | null
+  /**
+   * Parsed billing payload. Callers also use it to classify the account's plan
+   * mode (the `plans[]` entries are the only authoritative source).
+   */
+  billing: Record<string, unknown> | null
 }
 
 export async function fetchQuotaRaw(
@@ -32,7 +37,7 @@ export async function fetchQuotaRaw(
       fetcher(`${apiBase}/zcode-plan/billing/balance`, { headers }).catch(() => null),
     ])
     if (!billingRes.ok) {
-      return { known: false, remaining: null, total: null, resetAt: null, lastUpdatedAt: now, rawJson: null }
+      return { known: false, remaining: null, total: null, resetAt: null, lastUpdatedAt: now, rawJson: null, billing: null }
     }
     const billing = (await billingRes.json()) as Record<string, unknown>
     const balance = balanceRes?.ok ? ((await balanceRes.json()) as Record<string, unknown>) : null
@@ -55,9 +60,10 @@ export async function fetchQuotaRaw(
       resetAt,
       lastUpdatedAt: now,
       rawJson: JSON.stringify({ billing, balance }),
+      billing,
     }
   } catch {
-    return { known: false, remaining: null, total: null, resetAt: null, lastUpdatedAt: now, rawJson: null }
+    return { known: false, remaining: null, total: null, resetAt: null, lastUpdatedAt: now, rawJson: null, billing: null }
   }
 }
 
