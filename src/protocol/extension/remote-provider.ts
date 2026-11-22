@@ -495,8 +495,11 @@ export class RemoteProvider implements Provider {
       // the Console is not blind to it. Undeclared action → undefined.
       async getClaimStatus(_ctx: ProviderCtx, account: Account): Promise<unknown> {
         if (!declaredActions.has('claim-status')) return undefined
-        const res = await client.invokeAction({ actionId: 'claim-status', accountId: account.id })
-        return res.result
+        // `invokeAction` resolves to the action's response body itself (it is
+        // not wrapped in `{ result }` like the typed chat call), so return it
+        // as-is — reading `.result` yielded undefined and silently hid the
+        // provider's claim state from the Console.
+        return client.invokeAction({ actionId: 'claim-status', accountId: account.id })
       },
     }
 
