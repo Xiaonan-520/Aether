@@ -56,6 +56,15 @@ const MANIFEST = {
       fallbackModels: [{ id: 'glm-5.2', name: 'GLM-5.2', capabilities: { vision: false, toolCall: true, streaming: true } }],
       actions: [
         {
+          id: 'claim-status',
+          httpMethod: 'POST',
+          title: 'Claim status',
+          mode: 'read',
+          sideEffects: 'none',
+          ui: 'none',
+          inputSchema: { type: 'object', properties: {} },
+        },
+        {
           id: 'submit-captcha',
           httpMethod: 'POST',
           title: 'Submit captcha token',
@@ -97,6 +106,13 @@ function twoPhaseFetch(calls: Call[], secondPhaseStatus = 200): typeof fetch {
         authorizationUrl: 'https://chat.z.ai/api/oauth/authorize?client_id=c&state=s&response_type=code',
         expiresIn: 304,
         pollInterval: 2,
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    if (method === 'POST' && path === '/v1/actions/claim-status') {
+      // Mirrors the extension: the action body IS the response (no {result}).
+      return new Response(JSON.stringify({
+        enabled: true,
+        accounts: [{ accountId: 'zcode-abc', running: true }],
       }), { status: 200, headers: { 'content-type': 'application/json' } })
     }
     if (method === 'POST' && /^\/v1\/accounts\/zcode-abc\/(enable|disable)$/.test(path)) {
@@ -207,5 +223,24 @@ describe('remote enable/disable bridge', () => {
       'POST /v1/accounts/zcode-abc/disable',
       'POST /v1/accounts/zcode-abc/enable',
     ])
+  })
+})
+
+describe('remote claim-status bridge', () => {
+  // Regression: the bridge returned `res.result`, but invokeAction resolves to
+  // the action body itself, so the Console silently saw an empty claim list for
+  // a provider that was claiming on its own timer.
+  it('returns the action body, not a wrapped result', async () => {
+    const calls: Call[] = []
+    const [provider] = providers(twoPhaseFetch(calls))
+
+    const status = await provider!.ops.getClaimStatus!(NO_CTX, ACCOUNT) as {
+      enabled: boolean
+      accounts: Array<{ accountId: string; running: boolean }>
+    }
+
+    expect(calls.at(-1)).toEqual({ method: 'POST', path: '/v1/actions/claim-status' })
+    expect(status.enabled).toBe(true)
+    expect(status.accounts[0]).toMatchObject({ accountId: 'zcode-abc', running: true })
   })
 })
