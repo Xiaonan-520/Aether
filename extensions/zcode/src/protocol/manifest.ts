@@ -107,6 +107,35 @@ export const MANIFEST: ExtensionManifest = {
             properties: { ok: { type: 'boolean' } },
           },
         },
+        {
+          // 手动领取试用/周末套餐（auto-claim 之外的运维入口）。
+          // Claiming runs on a timer by default (ZCODE_AUTO_CLAIM); this action
+          // claims once and returns the raw outcome so an operator can see why
+          // a claim failed (already_claimed / captcha / quota_exhausted …).
+          id: 'claim-plan',
+          httpMethod: 'POST',
+          title: 'Claim trial plan',
+          mode: 'write',
+          sideEffects: 'one-shot',
+          ui: 'none',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account_id: { type: 'string', description: 'Opaque account id (optional; defaults to the first account).' },
+              plan_id: { type: 'string', description: 'Campaign plan id (optional; defaults to the highest-priority claimable plan).' },
+            },
+          },
+          outputSchema: {
+            type: 'object',
+            properties: {
+              ok: { type: 'boolean' },
+              planId: { type: 'string' },
+              failureKind: { type: 'string' },
+              code: { type: 'string' },
+              message: { type: 'string' },
+            },
+          },
+        },
       ],
     },
   ],

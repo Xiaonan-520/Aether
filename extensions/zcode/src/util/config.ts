@@ -28,6 +28,18 @@ export interface AppConfig {
   captchaSolveConcurrency: number
   captchaSolveTimeoutMs: number
   captchaCpuLimitPercent: number
+  /**
+   * Client version reported to the upstream (`X-ZCode-App-Version` / UA).
+   * The edge rejects outdated clients with 3012, so this tracks the official
+   * client's releases rather than this project's.
+   */
+  appVersion: string
+  /** Auto-claim trial/weekend plans (reference `claim.enabled`, default on). */
+  autoClaim: boolean
+  /** Claim only this plan_id; empty = highest-priority plan in the campaign. */
+  autoClaimPlanId: string | undefined
+  autoClaimPollMs: number
+  autoClaimCooldownMs: number
 }
 
 function intEnv(name: string, fallback: number): number {
@@ -66,5 +78,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     captchaSolveConcurrency: intEnv('ZCODE_CAPTCHA_SOLVE_CONCURRENCY', 2),
     captchaSolveTimeoutMs: intEnv('ZCODE_CAPTCHA_SOLVE_TIMEOUT_MS', 30_000),
     captchaCpuLimitPercent: intEnv('ZCODE_CAPTCHA_CPU_LIMIT_PCT', 70),
+    appVersion: env.ZCODE_APP_VERSION?.trim() || '3.19.1',
+    // Reference defaults: claim.enabled=true, auto=true, 5 min poll / 10 min cooldown.
+    autoClaim: env.ZCODE_AUTO_CLAIM !== '0',
+    autoClaimPlanId: env.ZCODE_AUTO_CLAIM_PLAN_ID?.trim() || undefined,
+    autoClaimPollMs: intEnv('ZCODE_AUTO_CLAIM_POLL_MS', 300_000),
+    autoClaimCooldownMs: intEnv('ZCODE_AUTO_CLAIM_COOLDOWN_MS', 600_000),
   }
 }

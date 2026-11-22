@@ -290,6 +290,26 @@ export function createExtensionServer(opts: RouterOptions) {
       writeJson(ctx.res, 200, quota)
       return
     }
+    if (actionId === 'claim-plan') {
+      const runtime = provider.getAutoClaim()
+      if (!runtime) throw errors.terminal('auto-claim is not wired in this build', { responseStatus: 501 })
+      let target = accountId
+      if (!target) {
+        const accounts = await provider.listAccounts()
+        target = accounts[0]?.accountId
+      }
+      if (!target) throw errors.terminal('no account to claim for', { responseStatus: 409 })
+      const planId = typeof body.plan_id === 'string' && body.plan_id.length > 0 ? body.plan_id : undefined
+      const outcome = await runtime.claimOnce(target, planId)
+      logger.info('claim.action', {
+        request_id: ctx.requestId,
+        account_id: target,
+        ok: outcome.ok,
+        plan_id: outcome.planId,
+      })
+      writeJson(ctx.res, 200, outcome)
+      return
+    }
     throw errors.terminal(`action "${actionId}" is declared but not implemented`, { responseStatus: 501 })
   }
 

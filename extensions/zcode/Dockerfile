@@ -26,7 +26,8 @@ ENV NODE_ENV=production \
     DATA_DIR=/data \
     LOG_LEVEL=info \
     ZCODE_CAPTCHA_MODE=auto \
-    ZCODE_CAPTCHA_CPU_LIMIT_PCT=70
+    ZCODE_CAPTCHA_CPU_LIMIT_PCT=70 \
+    ZCODE_AUTO_CLAIM=1
 WORKDIR /app
 # Non-root; /data is the declared named-volume mount point.
 RUN groupadd -r -g 10001 zcode && useradd -r -u 10001 -g zcode zcode \

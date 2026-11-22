@@ -9,6 +9,7 @@ import { loadConfig } from './util/config.js'
 import { Logger } from './util/logger.js'
 import { Store } from './storage/store.js'
 import { ZCodeProvider } from './provider/zcode/index.js'
+import { AutoClaimRuntime } from './provider/zcode/claim/runtime.js'
 import { createExtensionServer } from './server/router.js'
 import { ActiveRequestRegistry } from './server/registry.js'
 
@@ -35,6 +36,17 @@ export async function startApp(
     fetcher: overrides.fetcher,
   })
 
+  // Trial/weekend plans only become usable once claimed, and the campaign is
+  // first-come-first-served — so claiming runs on a timer per account.
+  const autoClaim = new AutoClaimRuntime({
+    config,
+    store,
+    logger,
+    getCaptchaToken: () => provider.getClaimCaptchaToken(),
+    ...(overrides.fetcher ? { fetcher: overrides.fetcher } : {}),
+  })
+  provider.setAutoClaim(autoClaim)
+
   const server = createExtensionServer({
     config,
     logger,
@@ -52,7 +64,9 @@ export async function startApp(
     port: config.port,
     host: config.host,
     data_dir: config.dataDir,
+    auto_claim: config.autoClaim,
   })
+  autoClaim.startAll()
 
   const handleSignal = (): void => {
     registry.abortAll()
